@@ -1,4 +1,3 @@
-// Χρήση του standard HTTPS module του Node.js για να μην βασιζόμαστε στο fetch
 import https from 'https';
 
 export default async function handler(req, res) {
@@ -20,12 +19,7 @@ export default async function handler(req, res) {
         const PROMPT = `Διάβασε αυτό το ελληνικό τιμολόγιο χονδρικής και εξήγαγε τα στοιχεία του.
 Επέστρεψε ΜΟΝΟ έγκυρο JSON, χωρίς markdown, χωρίς σχόλια, με αυτή τη δομή:
 {"supplier":"","date": "", "number": "", "footerDiscountPct": 0, "extraCharges": 0, "extraChargesLabel":"","lines": [{"name":"","qty":0,"netUnit":0,"vat":0,"discountPct":0}]}
-
-Κανόνες:
-- netUnit = καθαρή τιμή ΜΟΝΑΔΑΣ ΜΕΤΑ τις εκπτώσεις γραμμής, ΧΩΡΙΣ ΦΠΑ.
-- vat = συντελεστής ΦΠΑ της γραμμής: 24, 13, 6 ή 0.
-- extraCharges = ΑΘΡΟΙΣΜΑ τυχόν επιβαρύνσεων/φόρων ΕΚΤΟΣ ΦΠΑ (π.χ. φόρος καφέ).
-- Αν η εικόνα ΔΕΝ είναι τιμολόγιο: {"error":"not_invoice"}`;
+Αν η εικόνα ΔΕΝ είναι τιμολόγιο: {"error":"not_invoice"}`;
 
         const postData = JSON.stringify({
             model: "claude-3-5-sonnet-20241022",
@@ -53,22 +47,20 @@ export default async function handler(req, res) {
             }
         };
 
-        const apiRequest = () => new Promise((resolve, reject) => {
+        const apiResponse = await new Promise((resolve) => {
             const reqApi = https.request(options, (resApi) => {
                 let data = '';
                 resApi.on('data', (chunk) => data += chunk);
                 resApi.on('end', () => resolve({ status: resApi.statusCode, body: data }));
             });
-            reqApi.on('error', (e) => reject(e));
+            reqApi.on('error', (e) => resolve({ status: 500, body: JSON.stringify({ error: e.message }) }));
             reqApi.write(postData);
             reqApi.end();
         });
-
-        const apiResponse = await apiRequest();
         
         if (apiResponse.status !== 200) {
-            console.error("Anthropic Error Body:", apiResponse.body);
-            return res.status(apiResponse.status).json({ error: "anthropic_error", details: apiResponse.body });
+            // Επιστρέφει το ακριβές σφάλμα της Anthropic στο κινητό για να το δούμε
+            return res.status(200).json({ error: "anthropic_error", details: apiResponse.body });
         }
 
         const resBody = JSON.parse(apiResponse.body);
@@ -82,7 +74,6 @@ export default async function handler(req, res) {
         return res.status(200).json(JSON.parse(raw));
 
     } catch (err) {
-        console.error(err);
-        return res.status(500).json({ error: "read_failed", message: err.message });
+        return res.status(200).json({ error: "crash", details: err.message });
     }
 }
