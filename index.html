@@ -153,11 +153,17 @@
                     body: JSON.stringify({ imageBase64: pureBase64, mediaType: 'image/jpeg' })
                 });
 
-                if (!response.ok) throw new Error('API Error');
+                if (!response.ok) throw new Error('API Error ' + response.status);
                 const data = await response.json();
 
                 if (data.error === "not_invoice") {
                     document.getElementById('error-text').innerText = "Η εικόνα δεν αναγνωρίστηκε ως τιμολόγιο.";
+                    showScreen('screen-error');
+                    return;
+                }
+                
+                if (data.error === "anthropic_error" || data.error === "crash") {
+                    document.getElementById('error-text').innerText = "Σφάλμα API: " + data.details;
                     showScreen('screen-error');
                     return;
                 }
@@ -166,7 +172,7 @@
                 populateForm();
                 showScreen('screen-result');
             } catch (err) {
-                document.getElementById('error-text').innerText = "Αποτυχία σύνδεσης με τον διακομιστή.";
+                document.getElementById('error-text').innerText = "Αποτυχία: " + err.message;
                 showScreen('screen-error');
             }
         }
