@@ -1,4 +1,8 @@
-import https from 'https';
+import Anthropic from '@anthropic-ai/sdk';
+
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
 
 export default async function handler(req, res) {
     const { k } = req.query;
@@ -21,7 +25,7 @@ export default async function handler(req, res) {
 {"supplier":"","date": "", "number": "", "footerDiscountPct": 0, "extraCharges": 0, "extraChargesLabel":"","lines": [{"name":"","qty":0,"netUnit":0,"vat":0,"discountPct":0}]}
 Αν η εικόνα ΔΕΝ είναι τιμολόγιο: {"error":"not_invoice"}`;
 
-        const postData = JSON.stringify({
+        const msg = await anthropic.messages.create({
             model: "claude-3-5-sonnet-20241022",
             max_tokens: 4096,
             system: "Είσαι σύστημα εξαγωγής δεδομένων από ελληνικά τιμολόγια. Απαντάς μόνο με έγκυρο JSON.",
@@ -34,37 +38,7 @@ export default async function handler(req, res) {
             }]
         });
 
-        const options = {
-            hostname: 'api.anthropic.com',
-            port: 443,
-            path: '/v1/messages',
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Key': process.env.ANTHROPIC_API_KEY,
-                'Anthropic-Version': '2023-06-01',
-                'Content-Length': Buffer.byteLength(postData)
-            }
-        };
-
-        const apiResponse = await new Promise((resolve) => {
-            const reqApi = https.request(options, (resApi) => {
-                let data = '';
-                resApi.on('data', (chunk) => data += chunk);
-                resApi.on('end', () => resolve({ status: resApi.statusCode, body: data }));
-            });
-            reqApi.on('error', (e) => resolve({ status: 500, body: JSON.stringify({ error: e.message }) }));
-            reqApi.write(postData);
-            reqApi.end();
-        });
-        
-        if (apiResponse.status !== 200) {
-            // Επιστρέφει το ακριβές σφάλμα της Anthropic στο κινητό για να το δούμε
-            return res.status(200).json({ error: "anthropic_error", details: apiResponse.body });
-        }
-
-        const resBody = JSON.parse(apiResponse.body);
-        let raw = resBody.content.filter(b => b.type === "text").map(b => b.text).join("");
+        let raw = msg.content.filter(b => b.type === "text").map(b => b.text).join("");
         raw = raw.replace(/```json/g, "").replace(/```/g, "").trim();
 
         const s = raw.indexOf("{");
@@ -74,6 +48,7 @@ export default async function handler(req, res) {
         return res.status(200).json(JSON.parse(raw));
 
     } catch (err) {
-        return res.status(200).json({ error: "crash", details: err.message });
+        console.error("Anthropic SDK Error:", err);
+        return res.status(200).json({ error: "anthropic_error", details: err.message });
     }
 }
