@@ -147,7 +147,7 @@
         async function sendToBackend(base64Image) {
             try {
                 const pureBase64 = base64Image.split(',')[1];
-                const response = await fetch(`/api/scan?k=${SECRET_TOKEN}`, {
+                const response = await fetch(`/api/scan.js?k=${SECRET_TOKEN}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ imageBase64: pureBase64, mediaType: 'image/jpeg' })
