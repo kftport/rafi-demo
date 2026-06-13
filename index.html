@@ -26,6 +26,13 @@
         .heat-warm { border-color: #ff9500; color: #ff9500; }
         .heat-cold { border-color: #8e8e93; color: #8e8e93; }
         .del-btn { background:#ff3b30; color:#fff; border:none; border-radius:6px; padding:4px 8px; font-size:12px; cursor:pointer; width:auto; margin:0; font-weight:bold; }
+        .row-warn { background:#fff8e1; }
+        .row-error { background:#ffebee; }
+        .flag-badge { font-size:10px; padding:1px 5px; border-radius:4px; color:#fff; white-space:nowrap; }
+        .badge-corr { background:#ff9500; }
+        .badge-err { background:#ff3b30; }
+        .banner { padding:10px; border-radius:8px; font-size:13px; margin-top:10px; }
+        .banner-info { background:#fff8e1; border:1px solid #ffd54f; }
     </style>
 </head>
 <body>
@@ -46,6 +53,7 @@
 
     <div id="screen-result" class="screen">
         <h2>Στοιχεία Τιμολογίου</h2>
+        <div id="verify-banner"></div>
         <div class="form-group"><label>Προμηθευτής</label><input type="text" id="inv-supplier"></div>
         <div class="form-group"><label>Αρ. Τιμολογίου</label><input type="text" id="inv-number"></div>
         <div class="form-group"><label>Ημερομηνία</label><input type="text" id="inv-date"></div>
@@ -128,7 +136,6 @@
                     const MAX_WIDTH = 1600;
                     let width = img.width;
                     let height = img.height;
-
                     if (width > MAX_WIDTH) {
                         height *= MAX_WIDTH / width;
                         width = MAX_WIDTH;
@@ -137,7 +144,6 @@
                     canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
-                    
                     const base64Data = canvas.toDataURL('image/jpeg', 0.8);
                     sendToBackend(base64Data);
                 };
@@ -154,7 +160,6 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ imageBase64: pureBase64, mediaType: 'image/jpeg' })
                 });
-
                 if (!response.ok) throw new Error('API Error ' + response.status);
                 const data = await response.json();
 
@@ -163,7 +168,6 @@
                     showScreen('screen-error');
                     return;
                 }
-                
                 if (data.error === "anthropic_error" || data.error === "crash") {
                     document.getElementById('error-text').innerText = "Σφάλμα API: " + data.details;
                     showScreen('screen-error');
@@ -182,7 +186,9 @@
                         qty: l.qty || 0,
                         netUnit: l.netUnit || 0,
                         vat: (l.vat !== undefined && l.vat !== null) ? l.vat : 24,
-                        discountPct: l.discountPct || 0
+                        discountPct: l.discountPct || 0,
+                        lineValue: l.lineValue || 0,
+                        flags: l._flags || []
                     }))
                 };
                 populateForm();
@@ -193,6 +199,16 @@
             }
         }
 
+        function renderBanner() {
+            const banner = document.getElementById('verify-banner');
+            const corr = currentData.lines.filter(l => l.flags && l.flags.includes('discount_corrected')).length;
+            const errs = currentData.lines.filter(l => l.flags && (l.flags.includes('mismatch') || l.flags.includes('check_qty_price'))).length;
+            let html = '';
+            if (corr > 0) html += `<div class="banner banner-info">✓ Διορθώθηκαν αυτόματα <b>${corr}</b> γραμμές (η έκπτωση υπολογίστηκε από την αξία). Έλεγξε τις κίτρινες γραμμές.</div>`;
+            if (errs > 0) html += `<div class="banner banner-info">⚠ <b>${errs}</b> γραμμές δεν επαληθεύτηκαν — έλεγξέ τες (κόκκινες).</div>`;
+            banner.innerHTML = html;
+        }
+
         function populateForm() {
             document.getElementById('inv-supplier').value = currentData.supplier || '';
             document.getElementById('inv-number').value = currentData.number || '';
@@ -200,19 +216,20 @@
             document.getElementById('ctrl-charges').value = currentData.extraCharges || 0;
             document.getElementById('ctrl-charges-label').value = currentData.extraChargesLabel || '';
             document.getElementById('ctrl-discount').value = currentData.footerDiscountPct || 0;
+            renderBanner();
             renderLines();
             calculatePrices();
         }
 
         function manualEntry() {
             currentData = { supplier: '', date: '', number: '', footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
-            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0 });
+            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, flags: [] });
             populateForm();
             showScreen('screen-result');
         }
 
         function addNewLine() {
-            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0 });
+            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, flags: [] });
             renderLines();
             calculatePrices();
         }
@@ -225,6 +242,8 @@
 
         function updateLineData(index, field, value) {
             currentData.lines[index][field] = field === 'name' ? value : parseFloat(value) || 0;
+            // ο χρήστης διόρθωσε χειροκίνητα -> καθάρισε τα flags
+            currentData.lines[index].flags = [];
             calculatePrices();
         }
 
@@ -232,9 +251,15 @@
             const body = document.getElementById('lines-body');
             body.innerHTML = '';
             currentData.lines.forEach((line, i) => {
+                const flags = line.flags || [];
+                let rowClass = '';
+                let badge = '';
+                if (flags.includes('discount_corrected')) { rowClass = 'row-warn'; badge = '<span class="flag-badge badge-corr">διορθ.</span>'; }
+                if (flags.includes('mismatch') || flags.includes('check_qty_price')) { rowClass = 'row-error'; badge = '<span class="flag-badge badge-err">έλεγξε</span>'; }
                 const tr = document.createElement('tr');
+                tr.className = rowClass;
                 tr.innerHTML = `
-                    <td><input type="text" value="${line.name}" oninput="updateLineData(${i}, 'name', this.value)"></td>
+                    <td><input type="text" value="${line.name}" oninput="updateLineData(${i}, 'name', this.value)">${badge}</td>
                     <td><input type="number" value="${line.qty}" style="width:50px" oninput="updateLineData(${i}, 'qty', this.value)"></td>
                     <td><input type="number" value="${line.netUnit}" step="0.01" style="width:70px" oninput="updateLineData(${i}, 'netUnit', this.value)"></td>
                     <td><input type="number" value="${line.discountPct}" step="0.01" style="width:60px" oninput="updateLineData(${i}, 'discountPct', this.value)"></td>
@@ -272,18 +297,13 @@
                 const lineNet = unitAfterLineDisc * line.qty;
                 const surchargePU = (totalNet > 0 && line.qty > 0) ? (extraCharges * (lineNet / totalNet)) / line.qty : 0;
                 const cost = unitAfterLineDisc * (1 - footerDiscountPct / 100) + surchargePU;
-                
+
                 let shelfBeforeRound = cost * (1 + line.vat / 100) * (1 + markup / 100);
                 let finalShelf = shelfBeforeRound;
-
-                if (roundType === 'x9') {
-                    finalShelf = roundX9(shelfBeforeRound);
-                } else if (roundType === '05') {
-                    finalShelf = Math.round(shelfBeforeRound * 20) / 20;
-                }
+                if (roundType === 'x9') finalShelf = roundX9(shelfBeforeRound);
+                else if (roundType === '05') finalShelf = Math.round(shelfBeforeRound * 20) / 20;
 
                 const realMarkup = (cost > 0) ? (((finalShelf / (1 + line.vat / 100)) / cost) - 1) * 100 : 0;
-
                 line.calculatedCost = cost;
                 line.calculatedShelf = finalShelf;
 
@@ -305,14 +325,11 @@
             return closest / 100;
         }
 
-        function goToCommit() {
-            showScreen('screen-commit');
-        }
+        function goToCommit() { showScreen('screen-commit'); }
 
         function saveDemo(heat) {
             const shopName = document.getElementById('commit-shop').value || 'Άγνωστο Κατάστημα';
             const phone = document.getElementById('commit-phone').value || '';
-            
             const demoRecord = {
                 datetime: new Date().toISOString(),
                 supplier: document.getElementById('inv-supplier').value,
@@ -320,18 +337,13 @@
                 date: document.getElementById('inv-date').value,
                 markupUsed: document.getElementById('ctrl-markup').value,
                 extraCharges: document.getElementById('ctrl-charges').value,
-                shopName: shopName,
-                phone: phone,
-                heat: heat,
+                shopName: shopName, phone: phone, heat: heat,
                 linesCount: currentData.lines.length
             };
-
             let demos = JSON.parse(localStorage.getItem('rafi_demos') || '[]');
             demos.push(demoRecord);
             localStorage.setItem('rafi_demos', JSON.stringify(demos));
-
             alert('Το demo αποθηκεύτηκε επιτυχώς τοπικά!');
-            
             document.getElementById('commit-shop').value = '';
             document.getElementById('commit-phone').value = '';
             document.getElementById('file-input').value = '';
@@ -340,28 +352,14 @@
 
         function exportCSV() {
             let demos = JSON.parse(localStorage.getItem('rafi_demos') || '[]');
-            if (demos.length === 0) {
-                alert('Δεν υπάρχουν αποθηκευμένα δεδομένα demo για εξαγωγή.');
-                return;
-            }
-
+            if (demos.length === 0) { alert('Δεν υπάρχουν αποθηκευμένα δεδομένα demo για εξαγωγή.'); return; }
             let csvContent = "\uFEFF";
             csvContent += "Ημερομηνία;Κατάστημα;Κινητό;Θερμότητα;Προμηθευτής;Αρ. τιμολογίου;Πλήθος ειδών;Markup\n";
-
             demos.forEach(d => {
-                let row = [
-                    d.datetime.split('T')[0],
-                    d.shopName,
-                    d.phone,
-                    d.heat,
-                    d.supplier,
-                    d.number,
-                    d.linesCount,
-                    d.markupUsed + "%"
-                ].map(text => `"${String(text).replace(/"/g, '""')}"`).join(";");
+                let row = [d.datetime.split('T')[0], d.shopName, d.phone, d.heat, d.supplier, d.number, d.linesCount, d.markupUsed + "%"]
+                    .map(text => `"${String(text).replace(/"/g, '""')}"`).join(";");
                 csvContent += row + "\n";
             });
-
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement("a");
