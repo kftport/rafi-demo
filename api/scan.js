@@ -120,7 +120,6 @@ module.exports = async (req, res) => {
         const { imageBase64, mediaType } = req.body;
         if (!imageBase64) return res.status(400).json({ error: "Missing image data" });
 
-        // 1η ανάγνωση με Haiku (φθηνό)
         let apiResponse = await callClaude("claude-haiku-4-5-20251001", BASE_PROMPT, imageBase64, mediaType);
         if (apiResponse.status !== 200) return res.status(200).json({ error: "anthropic_error", details: apiResponse.body });
         let parsed = parseResponse(apiResponse);
@@ -128,24 +127,19 @@ module.exports = async (req, res) => {
         let problems = findProblems(parsed);
         let totalsOff = totalsMismatch(parsed);
 
-        // Αν κάτι δεν επαληθεύεται -> 2η ανάγνωση με Sonnet (ακριβέστερο)
         if (problems.length > 0 || totalsOff) {
-            let retryPrompt = BASE_PROMPT + `\n\nΠΡΟΣΟΧΗ: Σε προηγούμενη ανάγνωση κάποιες γραμμές ΔΕΝ επαληθεύτηκαν (qty × τιμή × (1-έκπτωση) δεν έβγαζε την ΑΞΙΑ τους`;
-            if (problems.length > 0) retryPrompt += `, π.χ. γραμμές ${problems.join(', ')}`;
-            if (totalsOff) retryPrompt += `, και το άθροισμα των γραμμών δεν συμφωνούσε με τη συνολική καθαρή αξία`;
-            retryPrompt += `). Ξαναδιάβασε ΟΛΟ το τιμολόγιο πιο προσεκτικά — ιδιαίτερα τιμές, ποσότητες και εκπτώσεις — ώστε κάθε γραμμή να επαληθεύεται και το άθροισμα να συμφωνεί με τα σύνολα.`;
-
-            const retry = await callClaude("claude-sonnet-4-6", retryPrompt, imageBase64, mediaType);
-            if (retry.status === 200) {
-                try {
+            let retryPrompt = BASE_PROMPT + "\n\nΠΡΟΣΟΧΗ: Σε προηγούμενη ανάγνωση κάποιες γραμμές ΔΕΝ επαληθεύτηκαν. Ξαναδιάβασε ΟΛΟ το τιμολόγιο πιο προσεκτικά — ιδιαίτερα τιμές, ποσότητες και εκπτώσεις — ώστε κάθε γραμμή να επαληθεύεται και το άθροισμα να συμφωνεί με τα σύνολα.";
+            try {
+                const retry = await callClaude("claude-sonnet-4-6", retryPrompt, imageBase64, mediaType);
+                if (retry.status === 200) {
                     const reparsed = parseResponse(retry);
                     const newProblems = findProblems(reparsed);
                     if (newProblems.length <= problems.length) {
                         parsed = reparsed;
                         problems = newProblems;
                     }
-                } catch (e) { /* κράτα την 1η ανάγνωση */ }
-            }
+                }
+            } catch (e) { /* κράτα την 1η ανάγνωση */ }
         }
 
         const lines = (parsed.lines || []).map((l, idx) => {
@@ -154,3 +148,25 @@ module.exports = async (req, res) => {
             const flags = problems.includes(idx + 1) ? ['mismatch'] : [];
             return {
                 name: l.name || '',
+                qty: parseFloat(l.qty) || 0,
+                netUnit: parseFloat(l.netUnit) || 0,
+                discountPct: disc,
+                vat: (l.vat !== undefined && l.vat !== null && l.vat !== '') ? parseFloat(l.vat) : 24,
+                lineValue: parseFloat(l.lineValue) || 0,
+                _flags: flags
+            };
+        }).filter(l => l.qty > 0);
+
+        return res.status(200).json({
+            supplier: parsed.supplier || '',
+            date: parsed.date || '',
+            number: parsed.number || '',
+            footerDiscountPct: parseFloat(parsed.footerDiscountPct) || 0,
+            extraCharges: parseFloat(parsed.extraCharges) || 0,
+            extraChargesLabel: parsed.extraChargesLabel || '',
+            lines: lines
+        });
+    } catch (err) {
+        return res.status(200).json({ error: "crash", details: err.message });
+    }
+};
