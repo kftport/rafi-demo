@@ -62,8 +62,10 @@ module.exports = async (req, res) => {
 
         const resBody = JSON.parse(apiResponse.body);
         let raw = resBody.content.filter(b => b.type === "text").map(b => b.text).join("");
-        
-        return res.status(200).json(JSON.parse(raw));
+
+raw = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+
+return res.status(200).json(JSON.parse(raw));
 
     } catch (err) {
         return res.status(200).json({ error: "crash", details: err.message });
