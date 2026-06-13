@@ -21,7 +21,7 @@ module.exports = async (req, res) => {
 {"supplier":"","date": "", "number": "", "footerDiscountPct": 0, "extraCharges": 0, "extraChargesLabel":"","lines": [{"name":"","qty":0,"netUnit":0,"vat":0,"discountPct":0}]}`;
 
         const postData = JSON.stringify({
-            model: "claude-3-5-haiku-20241022",
+            model: "claude-3-5-sonnet-latest",
             max_tokens: 4096,
             messages: [{
                 role: "user",
