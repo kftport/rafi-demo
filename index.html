@@ -25,6 +25,7 @@
         .heat-hot { border-color: #ff3b30; color: #ff3b30; }
         .heat-warm { border-color: #ff9500; color: #ff9500; }
         .heat-cold { border-color: #8e8e93; color: #8e8e93; }
+        .del-btn { background:#ff3b30; color:#fff; border:none; border-radius:6px; padding:4px 8px; font-size:12px; cursor:pointer; width:auto; margin:0; font-weight:bold; }
     </style>
 </head>
 <body>
@@ -72,9 +73,11 @@
                         <th>Όνομα Είδους</th>
                         <th>Ποσ.</th>
                         <th>Καθ. Μονάδας (€)</th>
+                        <th>Έκπτ. %</th>
                         <th>ΦΠΑ %</th>
                         <th>Κόστος (€)</th>
                         <th>Τιμή Ραφιού (€)</th>
+                        <th></th>
                     </tr>
                 </thead>
                 <tbody id="lines-body"></tbody>
@@ -105,14 +108,13 @@
 
     <script>
         let currentData = { supplier: '', date: '', number: '', footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
-        const SECRET_TOKEN = "demo123"; // Μυστικό token ασφαλείας
+        const SECRET_TOKEN = "demo123";
 
         function showScreen(screenId) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
             document.getElementById(screenId).classList.add('active');
         }
 
-        // Σμίκρυνση εικόνας πριν την αποστολή (Ενότητα 5)
         function handleFileSelect(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -168,7 +170,21 @@
                     return;
                 }
 
-                currentData = data;
+                currentData = {
+                    supplier: data.supplier || '',
+                    date: data.date || '',
+                    number: data.number || '',
+                    footerDiscountPct: data.footerDiscountPct || 0,
+                    extraCharges: data.extraCharges || 0,
+                    extraChargesLabel: data.extraChargesLabel || '',
+                    lines: (data.lines || []).map(l => ({
+                        name: l.name || '',
+                        qty: l.qty || 0,
+                        netUnit: l.netUnit || 0,
+                        vat: (l.vat !== undefined && l.vat !== null) ? l.vat : 24,
+                        discountPct: l.discountPct || 0
+                    }))
+                };
                 populateForm();
                 showScreen('screen-result');
             } catch (err) {
@@ -177,27 +193,34 @@
             }
         }
 
-function populateForm() {
-    document.getElementById('inv-supplier').value = currentData.supplier || '';
-    document.getElementById('inv-number').value = currentData.number || '';
-    document.getElementById('inv-date').value = currentData.date || '';
-    document.getElementById('ctrl-charges').value = currentData.extraCharges || 0;
-    document.getElementById('ctrl-charges-label').value = currentData.extraChargesLabel || '';
-    document.getElementById('ctrl-discount').value = currentData.footerDiscountPct || 0;
-    renderLines();      // ✅ πρώτα δημιουργούνται τα rows
-    calculatePrices();  // ✅ μετά υπολογίζονται
-}
+        function populateForm() {
+            document.getElementById('inv-supplier').value = currentData.supplier || '';
+            document.getElementById('inv-number').value = currentData.number || '';
+            document.getElementById('inv-date').value = currentData.date || '';
+            document.getElementById('ctrl-charges').value = currentData.extraCharges || 0;
+            document.getElementById('ctrl-charges-label').value = currentData.extraChargesLabel || '';
+            document.getElementById('ctrl-discount').value = currentData.footerDiscountPct || 0;
+            renderLines();
+            calculatePrices();
+        }
 
         function manualEntry() {
             currentData = { supplier: '', date: '', number: '', footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
+            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0 });
             populateForm();
-            addNewLine();
             showScreen('screen-result');
         }
 
         function addNewLine() {
             currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0 });
             renderLines();
+            calculatePrices();
+        }
+
+        function removeLine(index) {
+            currentData.lines.splice(index, 1);
+            renderLines();
+            calculatePrices();
         }
 
         function updateLineData(index, field, value) {
@@ -214,6 +237,7 @@ function populateForm() {
                     <td><input type="text" value="${line.name}" oninput="updateLineData(${i}, 'name', this.value)"></td>
                     <td><input type="number" value="${line.qty}" style="width:50px" oninput="updateLineData(${i}, 'qty', this.value)"></td>
                     <td><input type="number" value="${line.netUnit}" step="0.01" style="width:70px" oninput="updateLineData(${i}, 'netUnit', this.value)"></td>
+                    <td><input type="number" value="${line.discountPct}" step="0.01" style="width:60px" oninput="updateLineData(${i}, 'discountPct', this.value)"></td>
                     <td>
                         <select style="width:60px" onchange="updateLineData(${i}, 'vat', this.value)">
                             <option value="24" ${line.vat == 24 ? 'selected' : ''}>24%</option>
@@ -224,29 +248,30 @@ function populateForm() {
                     </td>
                     <td id="cost-${i}">0.00</td>
                     <td id="shelf-${i}" style="font-weight:bold; color:#007aff;">0.00</td>
+                    <td><button class="del-btn" onclick="removeLine(${i})">✕</button></td>
                 `;
                 body.appendChild(tr);
             });
         }
 
-        // Η ακριβής μαθηματική λογική (Ενότητα 7)
         function calculatePrices() {
             const markup = parseFloat(document.getElementById('ctrl-markup').value) || 0;
             const extraCharges = parseFloat(document.getElementById('ctrl-charges').value) || 0;
             const footerDiscountPct = parseFloat(document.getElementById('ctrl-discount').value) || 0;
             const roundType = document.getElementById('ctrl-round').value;
 
-            // 1. Υπολογισμός totalNet
             let totalNet = 0;
             currentData.lines.forEach(line => {
-                totalNet += (line.netUnit * line.qty);
+                const lineDiscount = line.discountPct || 0;
+                totalNet += (line.netUnit * (1 - lineDiscount / 100) * line.qty);
             });
 
-            // 2. Υπολογισμός κόστους και ραφιού ανά γραμμή
             currentData.lines.forEach((line, i) => {
-                const lineNet = line.netUnit * line.qty;
-                const surchargePU = totalNet > 0 ? (extraCharges * (lineNet / totalNet)) / line.qty : 0;
-                const cost = line.netUnit * (1 - footerDiscountPct / 100) + surchargePU;
+                const lineDiscount = line.discountPct || 0;
+                const unitAfterLineDisc = line.netUnit * (1 - lineDiscount / 100);
+                const lineNet = unitAfterLineDisc * line.qty;
+                const surchargePU = (totalNet > 0 && line.qty > 0) ? (extraCharges * (lineNet / totalNet)) / line.qty : 0;
+                const cost = unitAfterLineDisc * (1 - footerDiscountPct / 100) + surchargePU;
                 
                 let shelfBeforeRound = cost * (1 + line.vat / 100) * (1 + markup / 100);
                 let finalShelf = shelfBeforeRound;
@@ -259,17 +284,16 @@ function populateForm() {
 
                 const realMarkup = (cost > 0) ? (((finalShelf / (1 + line.vat / 100)) / cost) - 1) * 100 : 0;
 
-                // Αποθήκευση υπολογισμένων τιμών στο αντικείμενο
                 line.calculatedCost = cost;
                 line.calculatedShelf = finalShelf;
 
-                // Ενημέρωση UI
-                document.getElementById(`cost-${i}`).innerText = cost.toFixed(2) + "€";
-                document.getElementById(`shelf-${i}`).innerHTML = `${finalShelf.toFixed(2)}€ <br><small style="color:#34c759">${realMarkup > 0 ? '+' : ''}${realMarkup.toFixed(0)}% mrg</small>`;
+                const costCell = document.getElementById(`cost-${i}`);
+                const shelfCell = document.getElementById(`shelf-${i}`);
+                if (costCell) costCell.innerText = cost.toFixed(2) + "€";
+                if (shelfCell) shelfCell.innerHTML = `${finalShelf.toFixed(2)}€ <br><small style="color:#34c759">${realMarkup > 0 ? '+' : ''}${realMarkup.toFixed(0)}% mrg</small>`;
             });
         }
 
-        // Συνάρτηση στρογγυλοποίησης .x9 (Ενότητα 7)
         function roundX9(x) {
             let cents = Math.round(x * 100);
             let candidates = [];
@@ -285,7 +309,6 @@ function populateForm() {
             showScreen('screen-commit');
         }
 
-        // Τοπική αποθήκευση (Ενότητα 9 & 10)
         function saveDemo(heat) {
             const shopName = document.getElementById('commit-shop').value || 'Άγνωστο Κατάστημα';
             const phone = document.getElementById('commit-phone').value || '';
@@ -309,14 +332,12 @@ function populateForm() {
 
             alert('Το demo αποθηκεύτηκε επιτυχώς τοπικά!');
             
-            // Καθαρισμός φορμών και επιστροφή στην αρχική
             document.getElementById('commit-shop').value = '';
             document.getElementById('commit-phone').value = '';
             document.getElementById('file-input').value = '';
             showScreen('screen-start');
         }
 
-        // Εξαγωγή σε CSV (Ενότητα 9)
         function exportCSV() {
             let demos = JSON.parse(localStorage.getItem('rafi_demos') || '[]');
             if (demos.length === 0) {
@@ -324,7 +345,7 @@ function populateForm() {
                 return;
             }
 
-            let csvContent = "\uFEFF"; // UTF-8 BOM για σωστά ελληνικά στο Excel
+            let csvContent = "\uFEFF";
             csvContent += "Ημερομηνία;Κατάστημα;Κινητό;Θερμότητα;Προμηθευτής;Αρ. τιμολογίου;Πλήθος ειδών;Markup\n";
 
             demos.forEach(d => {
@@ -351,7 +372,6 @@ function populateForm() {
             document.body.removeChild(link);
         }
 
-        // Αρχικό render αν ξεκινήσει χειροκίνητα
         renderLines();
     </script>
 </body>
