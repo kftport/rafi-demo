@@ -177,15 +177,16 @@
             }
         }
 
-        function populateForm() {
-            document.getElementById('inv-supplier').value = currentData.supplier || '';
-            document.getElementById('inv-number').value = currentData.number || '';
-            document.getElementById('inv-date').value = currentData.date || '';
-            document.getElementById('ctrl-charges').value = currentData.extraCharges || 0;
-            document.getElementById('ctrl-charges-label').value = currentData.extraChargesLabel || '';
-            document.getElementById('ctrl-discount').value = currentData.footerDiscountPct || 0;
-            calculatePrices();
-        }
+function populateForm() {
+    document.getElementById('inv-supplier').value = currentData.supplier || '';
+    document.getElementById('inv-number').value = currentData.number || '';
+    document.getElementById('inv-date').value = currentData.date || '';
+    document.getElementById('ctrl-charges').value = currentData.extraCharges || 0;
+    document.getElementById('ctrl-charges-label').value = currentData.extraChargesLabel || '';
+    document.getElementById('ctrl-discount').value = currentData.footerDiscountPct || 0;
+    renderLines();      // ✅ πρώτα δημιουργούνται τα rows
+    calculatePrices();  // ✅ μετά υπολογίζονται
+}
 
         function manualEntry() {
             currentData = { supplier: '', date: '', number: '', footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
