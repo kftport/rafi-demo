@@ -233,7 +233,7 @@
 
         function addNewLine() {
             currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, flags: [] });
-            renderLines(); calculatePrices();
+            renderLines(); calculatePrices(); renderBanner();
         }
 
         function removeLine(index) {
