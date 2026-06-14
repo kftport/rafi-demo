@@ -1,6 +1,5 @@
 const https = require('https');
 
-// ---- Υπολογισμός έκπτωσης από τα νούμερα (η δοκιμασμένη λογική) ----
 function deriveDiscount(qty, netUnit, lineValue) {
     const gross = qty * netUnit;
     if (gross <= 0) return { disc: 0, bad: true };
@@ -9,34 +8,27 @@ function deriveDiscount(qty, netUnit, lineValue) {
     return { disc: Math.round(Math.max(0, d) * 100) / 100, bad: false };
 }
 
-// ---- Κλήση Google Document AI ----
-function callDocumentAI(imageBase64, mediaType) {
-    const projectId = process.env.DOCAI_PROJECT_ID;
-    const location = process.env.DOCAI_LOCATION || 'eu';
-    const processorId = process.env.DOCAI_PROCESSOR_ID;
-    const apiKey = process.env.GOOGLE_API_KEY;
-
-    const payload = JSON.stringify({
-        rawDocument: {
-            content: imageBase64,
-            mimeType: mediaType || 'image/jpeg'
-        }
+function callClaude(model, promptText, imageBase64, mediaType) {
+    const postData = JSON.stringify({
+        model: model,
+        max_tokens: 8192,
+        messages: [{
+            role: "user",
+            content: [
+                { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: imageBase64 } },
+                { type: "text", text: promptText }
+            ]
+        }]
     });
-
-    const host = `${location}-documentai.googleapis.com`;
-    const path = `/v1/projects/${projectId}/locations/${location}/processors/${processorId}:process?key=${apiKey}`;
-
     const options = {
-        hostname: host,
-        port: 443,
-        path: path,
-        method: 'POST',
+        hostname: 'api.anthropic.com', port: 443, path: '/v1/messages', method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(payload)
+            'X-API-Key': process.env.ANTHROPIC_API_KEY,
+            'Anthropic-Version': '2023-06-01',
+            'Content-Length': Buffer.byteLength(postData)
         }
     };
-
     return new Promise((resolve, reject) => {
         const r = https.request(options, (resp) => {
             let data = '';
@@ -44,76 +36,72 @@ function callDocumentAI(imageBase64, mediaType) {
             resp.on('end', () => resolve({ status: resp.statusCode, body: data }));
         });
         r.on('error', reject);
-        r.write(payload);
+        r.write(postData);
         r.end();
     });
 }
 
-// ---- Βοηθητικά για ανάγνωση των entities του Document AI ----
-function getEntities(doc, type) {
-    return (doc.entities || []).filter(e => e.type === type);
-}
-function num(val) {
-    if (val === undefined || val === null) return 0;
-    const cleaned = String(val).replace(/[^0-9,.\-]/g, '').replace(',', '.');
-    const n = parseFloat(cleaned);
-    return isNaN(n) ? 0 : n;
-}
-function txt(e) {
-    if (!e) return '';
-    if (e.normalizedValue && e.normalizedValue.text) return e.normalizedValue.text;
-    return e.mentionText || '';
+function parseResponse(apiResponse) {
+    const resBody = JSON.parse(apiResponse.body);
+    let raw = resBody.content.filter(b => b.type === "text").map(b => b.text).join("");
+    raw = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+    return JSON.parse(raw);
 }
 
-// ---- Μετατροπή απάντησης Document AI στη μορφή της εφαρμογής ----
-function transformDocAI(doc) {
-    // top-level πεδία
-    const supplier = txt(getEntities(doc, 'supplier_name')[0]) || '';
-    const date = txt(getEntities(doc, 'invoice_date')[0]) || '';
-    const number = txt(getEntities(doc, 'invoice_id')[0]) || '';
-
-    const lines = [];
-    (doc.entities || []).forEach(e => {
-        if (e.type !== 'line_item') return;
-        const props = e.properties || [];
-        const get = (t) => {
-            const p = props.find(x => x.type === t);
-            return p ? txt(p) : '';
-        };
-        const name = get('line_item/description') || get('line_item/product_code') || '';
-        const qty = num(get('line_item/quantity')) || 1;
-        const unitPrice = num(get('line_item/unit_price'));
-        const amount = num(get('line_item/amount'));
-
-        // netUnit = τιμή μονάδας προ έκπτωσης· lineValue = αξία γραμμής μετά
-        const netUnit = unitPrice || (amount && qty ? amount / qty : 0);
-        const lineValue = amount || (netUnit * qty);
-
+function buildLines(parsed) {
+    return (parsed.lines || []).map(l => {
+        const qty = parseFloat(l.qty) || 0;
+        const netUnit = parseFloat(l.netUnit) || 0;
+        const lineValue = parseFloat(l.lineValue) || 0;
         const { disc, bad } = deriveDiscount(qty, netUnit, lineValue);
-
-        if (qty > 0 && netUnit > 0) {
-            lines.push({
-                name: name,
-                qty: qty,
-                netUnit: netUnit,
-                discountPct: disc,
-                vat: 24,
-                lineValue: lineValue,
-                _flags: bad ? ['mismatch'] : []
-            });
-        }
-    });
-
-    return {
-        supplier: supplier,
-        date: date,
-        number: number,
-        footerDiscountPct: 0,
-        extraCharges: 0,
-        extraChargesLabel: '',
-        lines: lines
-    };
+        return {
+            name: l.name || '',
+            qty: qty,
+            netUnit: netUnit,
+            discountPct: disc,
+            vat: (l.vat !== undefined && l.vat !== null && l.vat !== '') ? parseFloat(l.vat) : 24,
+            lineValue: lineValue,
+            _flags: bad ? ['mismatch'] : []
+        };
+    }).filter(l => l.qty > 0);
 }
+
+function totalsMismatch(lines, parsed) {
+    const invNet = parseFloat(parsed.totalNet) || 0;
+    if (invNet <= 0) return false;
+    let net = 0;
+    lines.forEach(l => { net += l.netUnit * l.qty * (1 - l.discountPct / 100); });
+    return Math.abs(net - invNet) > Math.max(0.20, 0.02 * invNet);
+}
+
+const BASE_PROMPT = `Διαβάζεις ελληνικά τιμολόγια χονδρικής. Διάβασε ΜΟΝΟ τα παρακάτω, με μέγιστη ακρίβεια. ΜΗΝ ασχοληθείς με τις στήλες εκπτώσεων — δεν τις χρειάζομαι.
+
+ΓΙΑ ΚΑΘΕ ΓΡΑΜΜΗ ΠΡΟΪΟΝΤΟΣ διάβασε 4 νούμερα:
+1. "name": η περιγραφή του προϊόντος (στήλη ΠΕΡΙΓΡΑΦΗ/ΕΙΔΟΣ). Αγνόησε barcodes/κωδικούς.
+2. "qty": η ΠΟΣΟΤΗΤΑ σε τεμάχια. Αν υπάρχουν πολλές στήλες ποσότητας (ΠΟΣ.,ΤΕΜ.,ΜΟΝ.Α,ΜΟΝ.Β), διάλεξε ΕΚΕΙΝΗ που × ΤΙΜΗ πλησιάζει την ΑΞΙΑ. ΜΗΝ διαλέγεις στήλη με 0.
+3. "netUnit": η ΤΙΜΗ ΜΟΝΑΔΑΣ (στήλη ΤΙΜΗ), με ΟΛΑ τα δεκαδικά ακριβώς (π.χ. 1.53 όχι 1.6). Τιμή ΠΡΙΝ την έκπτωση.
+4. "lineValue": η ΑΞΙΑ της γραμμής ΜΕΤΑ τις εκπτώσεις (στήλη ΑΞΙΑ/ΚΑΘ.ΑΞΙΑ). Το πιο σημαντικό — διάβασέ το πολύ προσεκτικά.
+5. "vat": το ποσοστό ΦΠΑ της γραμμής (στήλη ΦΠΑ%, συνήθως 6/13/24).
+
+ΕΛΕΓΧΟΣ: για κάθε γραμμή, το lineValue πρέπει να είναι ≤ qty × netUnit. Αν δεις lineValue μεγαλύτερο, ξαναδιάβασε.
+
+ΓΙΑ ΤΟ ΣΥΝΟΛΟ:
+- "supplier": επωνυμία ΕΚΔΟΤΗ (όχι του πελάτη).
+- "date": ημερομηνία έκδοσης.
+- "number": αριθμός παραστατικού.
+- "extraCharges": ποσό επιβάρυνσης εκτός ΦΠΑ (π.χ. ΦΟΡΟΣ ΚΑΦΕ). Αλλιώς 0.
+- "extraChargesLabel": περιγραφή επιβάρυνσης.
+- "footerDiscountPct": έκπτωση σε όλο το τιμολόγιο (π.χ. ΜΕΤΡΗΤΟΙΣ 3%). Αλλιώς 0.
+- "totalNet": η ΣΥΝΟΛΙΚΗ ΚΑΘΑΡΗ ΑΞΙΑ προ ΦΠΑ (ΚΑΘΑΡΗ ΑΞΙΑ/ΑΞΙΑ ΜΕΤΑ ΕΚΠΤ/ΣΥΝ.ΚΑΘ.ΑΞΙΑ).
+
+ΣΗΜΑΝΤΙΚΟ:
+- Δεκαδικό κόμμα → τελεία (15,26 → 15.26).
+- Διάβασε ΟΛΕΣ τις γραμμές — μην παραλείψεις καμία.
+- Αγνόησε γραμμές συνόλων/τίτλων/κενές και ποσότητα 0.
+- ΜΟΝΟ έγκυρο JSON, χωρίς markdown/σχόλια.
+
+Δομή:
+{"supplier":"","date":"","number":"","footerDiscountPct":0,"extraCharges":0,"extraChargesLabel":"","totalNet":0,"lines":[{"name":"","qty":0,"netUnit":0,"lineValue":0,"vat":0}]}`;
 
 module.exports = async (req, res) => {
     const { k } = req.query;
@@ -124,19 +112,40 @@ module.exports = async (req, res) => {
         const { imageBase64, mediaType } = req.body;
         if (!imageBase64) return res.status(400).json({ error: "Missing image data" });
 
-        const apiResponse = await callDocumentAI(imageBase64, mediaType);
-        if (apiResponse.status !== 200) {
-            return res.status(200).json({ error: "anthropic_error", details: apiResponse.body });
+        // 1η ανάγνωση με Haiku (φθηνό)
+        let apiResponse = await callClaude("claude-haiku-4-5-20251001", BASE_PROMPT, imageBase64, mediaType);
+        if (apiResponse.status !== 200) return res.status(200).json({ error: "anthropic_error", details: apiResponse.body });
+        let parsed = parseResponse(apiResponse);
+        let lines = buildLines(parsed);
+
+        const problemCount = lines.filter(l => l._flags.length > 0).length;
+
+        // Αν κάτι δεν επαληθεύεται -> 2η ανάγνωση με Opus (ισχυρό)
+        if (problemCount > 0 || totalsMismatch(lines, parsed)) {
+            try {
+                const retryPrompt = BASE_PROMPT + "\n\nΠΡΟΣΟΧΗ: σε προηγούμενη ανάγνωση κάποιες γραμμές δεν έβγαζαν νόημα ή το άθροισμα δεν συμφωνούσε με τα σύνολα. Ξαναδιάβασε ΟΛΟ το τιμολόγιο πολύ προσεκτικά — ιδιαίτερα τιμή μονάδας και αξία γραμμής — και βεβαιώσου ότι δεν παρέλειψες καμία γραμμή.";
+                const retry = await callClaude("claude-opus-4-1-20250805", retryPrompt, imageBase64, mediaType);
+                if (retry.status === 200) {
+                    const reparsed = parseResponse(retry);
+                    const relines = buildLines(reparsed);
+                    const reproblems = relines.filter(l => l._flags.length > 0).length;
+                    if (reproblems <= problemCount) {
+                        parsed = reparsed;
+                        lines = relines;
+                    }
+                }
+            } catch (e) { /* κράτα την 1η ανάγνωση */ }
         }
 
-        const parsed = JSON.parse(apiResponse.body);
-        const doc = parsed.document;
-        if (!doc) {
-            return res.status(200).json({ error: "crash", details: "No document in response: " + apiResponse.body.slice(0, 500) });
-        }
-
-        const result = transformDocAI(doc);
-        return res.status(200).json(result);
+        return res.status(200).json({
+            supplier: parsed.supplier || '',
+            date: parsed.date || '',
+            number: parsed.number || '',
+            footerDiscountPct: parseFloat(parsed.footerDiscountPct) || 0,
+            extraCharges: parseFloat(parsed.extraCharges) || 0,
+            extraChargesLabel: parsed.extraChargesLabel || '',
+            lines: lines
+        });
     } catch (err) {
         return res.status(200).json({ error: "crash", details: err.message });
     }
