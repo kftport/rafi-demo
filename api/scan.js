@@ -93,15 +93,18 @@ const BASE_PROMPT = `Διαβάζεις ελληνικά τιμολόγια χο
 - "extraChargesLabel": περιγραφή επιβάρυνσης.
 - "footerDiscountPct": έκπτωση σε όλο το τιμολόγιο (π.χ. ΜΕΤΡΗΤΟΙΣ 3%). Αλλιώς 0.
 - "totalNet": η ΣΥΝΟΛΙΚΗ ΚΑΘΑΡΗ ΑΞΙΑ προ ΦΠΑ (ΚΑΘΑΡΗ ΑΞΙΑ/ΑΞΙΑ ΜΕΤΑ ΕΚΠΤ/ΣΥΝ.ΚΑΘ.ΑΞΙΑ).
+- "lineCount": ο συνολικός αριθμός γραμμών προϊόντων που μέτρησες στο τιμολόγιο.
 
 ΣΗΜΑΝΤΙΚΟ:
 - Δεκαδικό κόμμα → τελεία (15,26 → 15.26).
-- Διάβασε ΟΛΕΣ τις γραμμές — μην παραλείψεις καμία.
-- Αγνόησε γραμμές συνόλων/τίτλων/κενές και ποσότητα 0.
+- Διάβασε και επέστρεψε ΚΑΘΕ γραμμή του τιμολογίου ΑΥΤΟΥΣΙΑ, με τη σειρά που εμφανίζεται. ΑΠΑΓΟΡΕΥΕΤΑΙ να παραλείψεις, να ενώσεις ή να αγνοήσεις γραμμή για ΟΠΟΙΟΝΔΗΠΟΤΕ λόγο.
+- Αν δύο ή περισσότερες γραμμές είναι ΠΑΝΟΜΟΙΟΤΥΠΕΣ (ίδια περιγραφή, ποσότητα, τιμή, αξία), επέστρεψέ τες ΟΛΕΣ ξεχωριστά. ΜΗΝ τις θεωρήσεις διπλότυπο και ΜΗΝ τις συγχωνεύσεις — το τιμολόγιο μπορεί νόμιμα να έχει την ίδια χρέωση πολλές φορές. Η δουλειά σου είναι πιστή αντιγραφή, όχι έλεγχος ή διόρθωση.
+- Μέτρα προσεκτικά πόσες γραμμές προϊόντων υπάρχουν συνολικά και επέστρεψέ τες ΟΛΕΣ.
+- Αγνόησε ΜΟΝΟ γραμμές συνόλων/τίτλων/κενές και ποσότητα 0.
 - ΜΟΝΟ έγκυρο JSON, χωρίς markdown/σχόλια.
 
 Δομή:
-{"supplier":"","date":"","number":"","footerDiscountPct":0,"extraCharges":0,"extraChargesLabel":"","totalNet":0,"lines":[{"name":"","qty":0,"netUnit":0,"lineValue":0,"vat":0}]}`;
+{"supplier":"","date":"","number":"","footerDiscountPct":0,"extraCharges":0,"extraChargesLabel":"","totalNet":0,"lineCount":0,"lines":[{"name":"","qty":0,"netUnit":0,"lineValue":0,"vat":0}]}`;
 
 module.exports = async (req, res) => {
     const { k } = req.query;
@@ -119,17 +122,22 @@ module.exports = async (req, res) => {
         let lines = buildLines(parsed);
 
         const problemCount = lines.filter(l => l._flags.length > 0).length;
+        const expectedCount = parseInt(parsed.lineCount) || 0;
+        const countMismatch = expectedCount > 0 && lines.length < expectedCount;
 
-        // Αν κάτι δεν επαληθεύεται -> 2η ανάγνωση με Opus (ισχυρό)
-        if (problemCount > 0 || totalsMismatch(lines, parsed)) {
+        // Αν κάτι δεν επαληθεύεται ή λείπουν γραμμές -> 2η ανάγνωση με Opus
+        if (problemCount > 0 || countMismatch || totalsMismatch(lines, parsed)) {
             try {
-                const retryPrompt = BASE_PROMPT + "\n\nΠΡΟΣΟΧΗ: σε προηγούμενη ανάγνωση κάποιες γραμμές δεν έβγαζαν νόημα ή το άθροισμα δεν συμφωνούσε με τα σύνολα. Ξαναδιάβασε ΟΛΟ το τιμολόγιο πολύ προσεκτικά — ιδιαίτερα τιμή μονάδας και αξία γραμμής — και βεβαιώσου ότι δεν παρέλειψες καμία γραμμή.";
+                const retryPrompt = BASE_PROMPT + "\n\nΠΡΟΣΟΧΗ: σε προηγούμενη ανάγνωση κάποιες γραμμές δεν έβγαζαν νόημα, έλειπαν, ή το άθροισμα δεν συμφωνούσε με τα σύνολα. Ξαναδιάβασε ΟΛΟ το τιμολόγιο πολύ προσεκτικά — ιδιαίτερα τιμή μονάδας και αξία γραμμής — και βεβαιώσου ότι επέστρεψες ΚΑΘΕ γραμμή, ακόμα και πανομοιότυπες, χωρίς να παραλείψεις καμία.";
                 const retry = await callClaude("claude-opus-4-1-20250805", retryPrompt, imageBase64, mediaType);
                 if (retry.status === 200) {
                     const reparsed = parseResponse(retry);
                     const relines = buildLines(reparsed);
                     const reproblems = relines.filter(l => l._flags.length > 0).length;
-                    if (reproblems <= problemCount) {
+                    const reExpected = parseInt(reparsed.lineCount) || 0;
+                    const reCountOk = reExpected === 0 || relines.length >= reExpected;
+                    // κράτα το Opus αν έχει λιγότερα προβλήματα Ή περισσότερες/πλήρεις γραμμές
+                    if (reproblems <= problemCount || (relines.length > lines.length && reCountOk)) {
                         parsed = reparsed;
                         lines = relines;
                     }
