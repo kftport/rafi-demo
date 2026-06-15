@@ -66,12 +66,14 @@ function buildLines(parsed) {
     }).filter(l => l.qty > 0);
 }
 
-function totalsMismatch(lines, parsed) {
+function checkTotals(lines, parsed) {
     const invNet = parseFloat(parsed.totalNet) || 0;
-    if (invNet <= 0) return false;
+    if (invNet <= 0) return { mismatch: false, gap: 0, invNet: 0 };
     let net = 0;
     lines.forEach(l => { net += l.netUnit * l.qty * (1 - l.discountPct / 100); });
-    return Math.abs(net - invNet) > Math.max(0.20, 0.02 * invNet);
+    const gap = Math.round((invNet - net) * 100) / 100;
+    const mismatch = Math.abs(gap) > Math.max(0.20, 0.02 * invNet);
+    return { mismatch, gap, invNet };
 }
 
 const BASE_PROMPT = `Διαβάζεις ελληνικά τιμολόγια χονδρικής. Διάβασε ΜΟΝΟ τα παρακάτω, με μέγιστη ακρίβεια. ΜΗΝ ασχοληθείς με τις στήλες εκπτώσεων — δεν τις χρειάζομαι.
@@ -92,19 +94,18 @@ const BASE_PROMPT = `Διαβάζεις ελληνικά τιμολόγια χο
 - "extraCharges": ποσό επιβάρυνσης εκτός ΦΠΑ (π.χ. ΦΟΡΟΣ ΚΑΦΕ). Αλλιώς 0.
 - "extraChargesLabel": περιγραφή επιβάρυνσης.
 - "footerDiscountPct": έκπτωση σε όλο το τιμολόγιο (π.χ. ΜΕΤΡΗΤΟΙΣ 3%). Αλλιώς 0.
-- "totalNet": η ΣΥΝΟΛΙΚΗ ΚΑΘΑΡΗ ΑΞΙΑ προ ΦΠΑ (ΚΑΘΑΡΗ ΑΞΙΑ/ΑΞΙΑ ΜΕΤΑ ΕΚΠΤ/ΣΥΝ.ΚΑΘ.ΑΞΙΑ).
-- "lineCount": ο συνολικός αριθμός γραμμών προϊόντων που μέτρησες στο τιμολόγιο.
+- "totalNet": η ΣΥΝΟΛΙΚΗ ΚΑΘΑΡΗ ΑΞΙΑ προ ΦΠΑ (ΚΑΘΑΡΗ ΑΞΙΑ/ΑΞΙΑ ΜΕΤΑ ΕΚΠΤ/ΣΥΝ.ΚΑΘ.ΑΞΙΑ). Διάβασέ το πολύ προσεκτικά — χρησιμεύει για επαλήθευση.
 
 ΣΗΜΑΝΤΙΚΟ:
 - Δεκαδικό κόμμα → τελεία (15,26 → 15.26).
 - Διάβασε και επέστρεψε ΚΑΘΕ γραμμή του τιμολογίου ΑΥΤΟΥΣΙΑ, με τη σειρά που εμφανίζεται. ΑΠΑΓΟΡΕΥΕΤΑΙ να παραλείψεις, να ενώσεις ή να αγνοήσεις γραμμή για ΟΠΟΙΟΝΔΗΠΟΤΕ λόγο.
 - Αν δύο ή περισσότερες γραμμές είναι ΠΑΝΟΜΟΙΟΤΥΠΕΣ (ίδια περιγραφή, ποσότητα, τιμή, αξία), επέστρεψέ τες ΟΛΕΣ ξεχωριστά. ΜΗΝ τις θεωρήσεις διπλότυπο και ΜΗΝ τις συγχωνεύσεις — το τιμολόγιο μπορεί νόμιμα να έχει την ίδια χρέωση πολλές φορές. Η δουλειά σου είναι πιστή αντιγραφή, όχι έλεγχος ή διόρθωση.
-- Μέτρα προσεκτικά πόσες γραμμές προϊόντων υπάρχουν συνολικά και επέστρεψέ τες ΟΛΕΣ.
+- Το άθροισμα των αξιών (lineValue) όλων των γραμμών πρέπει να ισούται με το totalNet. Αν δεν βγαίνει, μάλλον παρέλειψες γραμμή — ξαναέλεγξε.
 - Αγνόησε ΜΟΝΟ γραμμές συνόλων/τίτλων/κενές και ποσότητα 0.
 - ΜΟΝΟ έγκυρο JSON, χωρίς markdown/σχόλια.
 
 Δομή:
-{"supplier":"","date":"","number":"","footerDiscountPct":0,"extraCharges":0,"extraChargesLabel":"","totalNet":0,"lineCount":0,"lines":[{"name":"","qty":0,"netUnit":0,"lineValue":0,"vat":0}]}`;
+{"supplier":"","date":"","number":"","footerDiscountPct":0,"extraCharges":0,"extraChargesLabel":"","totalNet":0,"lines":[{"name":"","qty":0,"netUnit":0,"lineValue":0,"vat":0}]}`;
 
 module.exports = async (req, res) => {
     const { k } = req.query;
@@ -115,31 +116,33 @@ module.exports = async (req, res) => {
         const { imageBase64, mediaType } = req.body;
         if (!imageBase64) return res.status(400).json({ error: "Missing image data" });
 
-        // 1η ανάγνωση με Haiku (φθηνό)
+        // 1η ανάγνωση με Haiku
         let apiResponse = await callClaude("claude-haiku-4-5-20251001", BASE_PROMPT, imageBase64, mediaType);
         if (apiResponse.status !== 200) return res.status(200).json({ error: "anthropic_error", details: apiResponse.body });
         let parsed = parseResponse(apiResponse);
         let lines = buildLines(parsed);
+        let totalNet = parseFloat(parsed.totalNet) || 0;
 
-        const problemCount = lines.filter(l => l._flags.length > 0).length;
-        const expectedCount = parseInt(parsed.lineCount) || 0;
-        const countMismatch = expectedCount > 0 && lines.length < expectedCount;
+        let problemCount = lines.filter(l => l._flags.length > 0).length;
+        let totals = checkTotals(lines, parsed);
 
-        // Αν κάτι δεν επαληθεύεται ή λείπουν γραμμές -> 2η ανάγνωση με Opus
-        if (problemCount > 0 || countMismatch || totalsMismatch(lines, parsed)) {
+        // Αν κάτι δεν επαληθεύεται ή το άθροισμα δεν κλείνει -> Opus
+        if (problemCount > 0 || totals.mismatch) {
             try {
-                const retryPrompt = BASE_PROMPT + "\n\nΠΡΟΣΟΧΗ: σε προηγούμενη ανάγνωση κάποιες γραμμές δεν έβγαζαν νόημα, έλειπαν, ή το άθροισμα δεν συμφωνούσε με τα σύνολα. Ξαναδιάβασε ΟΛΟ το τιμολόγιο πολύ προσεκτικά — ιδιαίτερα τιμή μονάδας και αξία γραμμής — και βεβαιώσου ότι επέστρεψες ΚΑΘΕ γραμμή, ακόμα και πανομοιότυπες, χωρίς να παραλείψεις καμία.";
+                const retryPrompt = BASE_PROMPT + "\n\nΠΡΟΣΟΧΗ: σε προηγούμενη ανάγνωση το άθροισμα των γραμμών ΔΕΝ συμφωνούσε με το σύνολο του τιμολογίου — πιθανότατα ΠΑΡΕΛΕΙΨΕΣ μια ή περισσότερες γραμμές (συχνά πανομοιότυπες γραμμές που λανθασμένα θεωρήθηκαν διπλότυπες). Ξαναδιάβασε ΟΛΟ το τιμολόγιο και επέστρεψε ΚΑΘΕ γραμμή ξεχωριστά, ακόμα και αν δύο γραμμές έχουν ίδια νούμερα. Το άθροισμα των αξιών πρέπει να ισούται με τη συνολική καθαρή αξία.";
                 const retry = await callClaude("claude-opus-4-1-20250805", retryPrompt, imageBase64, mediaType);
                 if (retry.status === 200) {
                     const reparsed = parseResponse(retry);
                     const relines = buildLines(reparsed);
+                    const reTotals = checkTotals(relines, reparsed);
                     const reproblems = relines.filter(l => l._flags.length > 0).length;
-                    const reExpected = parseInt(reparsed.lineCount) || 0;
-                    const reCountOk = reExpected === 0 || relines.length >= reExpected;
-                    // κράτα το Opus αν έχει λιγότερα προβλήματα Ή περισσότερες/πλήρεις γραμμές
-                    if (reproblems <= problemCount || (relines.length > lines.length && reCountOk)) {
+                    const betterTotals = Math.abs(reTotals.gap) < Math.abs(totals.gap);
+                    if (betterTotals || relines.length > lines.length || reproblems < problemCount) {
                         parsed = reparsed;
                         lines = relines;
+                        totalNet = parseFloat(reparsed.totalNet) || totalNet;
+                        problemCount = reproblems;
+                        totals = reTotals;
                     }
                 }
             } catch (e) { /* κράτα την 1η ανάγνωση */ }
@@ -152,6 +155,8 @@ module.exports = async (req, res) => {
             footerDiscountPct: parseFloat(parsed.footerDiscountPct) || 0,
             extraCharges: parseFloat(parsed.extraCharges) || 0,
             extraChargesLabel: parsed.extraChargesLabel || '',
+            totalNet: totalNet,
+            totalsGap: totals.mismatch ? totals.gap : 0,
             lines: lines
         });
     } catch (err) {
