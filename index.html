@@ -114,7 +114,7 @@
     </div>
 
     <script>
-        let currentData = { supplier: '', date: '', number: '', footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
+        let currentData = { supplier: '', date: '', number: '', totalNet: 0, footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
         const SECRET_TOKEN = "demo123";
 
         function showScreen(screenId) {
@@ -183,6 +183,7 @@
 
                 currentData = {
                     supplier: data.supplier || '', date: data.date || '', number: data.number || '',
+                    totalNet: data.totalNet || 0,
                     footerDiscountPct: data.footerDiscountPct || 0,
                     extraCharges: data.extraCharges || 0, extraChargesLabel: data.extraChargesLabel || '',
                     lines: (data.lines || []).map(l => ({
@@ -203,13 +204,26 @@
         function renderBanner() {
             const banner = document.getElementById('verify-banner');
             const errs = currentData.lines.filter(l => l.flags && l.flags.includes('mismatch')).length;
-            if (errs > 0) {
-                banner.innerHTML = `<div class="banner banner-info">⚠ <b>${errs}</b> γραμμές δεν επαληθεύτηκαν αυτόματα — έλεγξε τις κόκκινες (συνήθως τιμή ή έκπτωση).</div>`;
-            } else if (currentData.lines.length > 0) {
-                banner.innerHTML = `<div class="banner banner-ok">✓ Όλες οι γραμμές επαληθεύτηκαν με τα σύνολα του τιμολογίου.</div>`;
-            } else {
-                banner.innerHTML = '';
+
+            let liveGap = 0;
+            if (currentData.totalNet > 0) {
+                let sum = 0;
+                currentData.lines.forEach(l => { sum += l.netUnit * l.qty * (1 - (l.discountPct||0)/100); });
+                liveGap = Math.round((currentData.totalNet - sum) * 100) / 100;
             }
+
+            let html = '';
+            if (Math.abs(liveGap) > 0.20) {
+                const what = liveGap > 0 ? 'λείπει' : 'περισσεύει';
+                html += `<div class="banner banner-info">⚠ Το άθροισμα των γραμμών δεν συμφωνεί με το σύνολο του τιμολογίου (${currentData.totalNet.toFixed(2)}€). <b>${what} ${Math.abs(liveGap).toFixed(2)}€</b> — ${liveGap > 0 ? 'μάλλον λείπει μια γραμμή, πρόσθεσέ την με το «+ Είδος»' : 'έλεγξε αν υπάρχει γραμμή παραπάνω'}.</div>`;
+            }
+            if (errs > 0) {
+                html += `<div class="banner banner-info">⚠ <b>${errs}</b> γραμμές χρειάζονται έλεγχο (κόκκινες).</div>`;
+            }
+            if (!html && currentData.lines.length > 0) {
+                html = `<div class="banner banner-ok">✓ Όλες οι γραμμές επαληθεύτηκαν και το άθροισμα κλείνει με το τιμολόγιο.</div>`;
+            }
+            banner.innerHTML = html;
         }
 
         function populateForm() {
@@ -219,13 +233,13 @@
             document.getElementById('ctrl-charges').value = currentData.extraCharges || 0;
             document.getElementById('ctrl-charges-label').value = currentData.extraChargesLabel || '';
             document.getElementById('ctrl-discount').value = currentData.footerDiscountPct || 0;
-            renderBanner();
             renderLines();
             calculatePrices();
+            renderBanner();
         }
 
         function manualEntry() {
-            currentData = { supplier: '', date: '', number: '', footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
+            currentData = { supplier: '', date: '', number: '', totalNet: 0, footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
             currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, flags: [] });
             populateForm();
             showScreen('screen-result');
