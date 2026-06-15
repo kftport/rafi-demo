@@ -234,7 +234,6 @@
             document.getElementById('ctrl-charges-label').value = currentData.extraChargesLabel || '';
             document.getElementById('ctrl-discount').value = currentData.footerDiscountPct || 0;
             renderLines();
-            calculatePrices();
             renderBanner();
         }
 
@@ -247,18 +246,50 @@
 
         function addNewLine() {
             currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, flags: [] });
-            renderLines(); calculatePrices(); renderBanner();
+            renderLines(); renderBanner();
         }
 
         function removeLine(index) {
             currentData.lines.splice(index, 1);
-            renderLines(); calculatePrices(); renderBanner();
+            renderLines(); renderBanner();
         }
 
         function updateLineData(index, field, value) {
             currentData.lines[index][field] = field === 'name' ? value : parseFloat(value) || 0;
             currentData.lines[index].flags = [];
-            calculatePrices(); renderBanner();
+            renderBanner();
+            if (field !== 'name') {
+                renderLines();
+            }
+        }
+
+        function calculatePrices() {
+            renderLines();
+        }
+
+        function computeRow(line) {
+            const markup = parseFloat(document.getElementById('ctrl-markup').value) || 0;
+            const extraCharges = parseFloat(document.getElementById('ctrl-charges').value) || 0;
+            const footerDiscountPct = parseFloat(document.getElementById('ctrl-discount').value) || 0;
+            const roundType = document.getElementById('ctrl-round').value;
+
+            let totalNet = 0;
+            currentData.lines.forEach(l => {
+                totalNet += (l.netUnit * (1 - (l.discountPct || 0) / 100) * l.qty);
+            });
+
+            const unitAfterLineDisc = line.netUnit * (1 - (line.discountPct || 0) / 100);
+            const lineNet = unitAfterLineDisc * line.qty;
+            const surchargePU = (totalNet > 0 && line.qty > 0) ? (extraCharges * (lineNet / totalNet)) / line.qty : 0;
+            const cost = unitAfterLineDisc * (1 - footerDiscountPct / 100) + surchargePU;
+
+            let shelfBeforeRound = cost * (1 + line.vat / 100) * (1 + markup / 100);
+            let finalShelf = shelfBeforeRound;
+            if (roundType === 'x9') finalShelf = roundX9(shelfBeforeRound);
+            else if (roundType === '05') finalShelf = Math.round(shelfBeforeRound * 20) / 20;
+
+            const realMarkup = (cost > 0) ? (((finalShelf / (1 + line.vat / 100)) / cost) - 1) * 100 : 0;
+            return { cost, finalShelf, realMarkup };
         }
 
         function renderLines() {
@@ -270,6 +301,7 @@
                 const tr = document.createElement('tr');
                 tr.className = isErr ? 'row-error' : '';
                 const badge = isErr ? '<span class="flag-badge badge-err">έλεγξε</span>' : '';
+                const r = computeRow(line);
                 tr.innerHTML = `
                     <td><input type="text" value="${line.name}" oninput="updateLineData(${i}, 'name', this.value)">${badge}</td>
                     <td><input type="number" value="${line.qty}" style="width:50px" oninput="updateLineData(${i}, 'qty', this.value)"></td>
@@ -283,43 +315,11 @@
                             <option value="0" ${line.vat == 0 ? 'selected' : ''}>0%</option>
                         </select>
                     </td>
-                    <td id="cost-${i}">0.00</td>
-                    <td id="shelf-${i}" style="font-weight:bold; color:#007aff;">0.00</td>
+                    <td>${r.cost.toFixed(2)}€</td>
+                    <td style="font-weight:bold; color:#007aff;">${r.finalShelf.toFixed(2)}€ <br><small style="color:#34c759">${r.realMarkup > 0 ? '+' : ''}${r.realMarkup.toFixed(0)}% mrg</small></td>
                     <td><button class="del-btn" onclick="removeLine(${i})">✕</button></td>
                 `;
                 body.appendChild(tr);
-            });
-        }
-
-        function calculatePrices() {
-            const markup = parseFloat(document.getElementById('ctrl-markup').value) || 0;
-            const extraCharges = parseFloat(document.getElementById('ctrl-charges').value) || 0;
-            const footerDiscountPct = parseFloat(document.getElementById('ctrl-discount').value) || 0;
-            const roundType = document.getElementById('ctrl-round').value;
-
-            let totalNet = 0;
-            currentData.lines.forEach(line => {
-                totalNet += (line.netUnit * (1 - (line.discountPct || 0) / 100) * line.qty);
-            });
-
-            currentData.lines.forEach((line, i) => {
-                const unitAfterLineDisc = line.netUnit * (1 - (line.discountPct || 0) / 100);
-                const lineNet = unitAfterLineDisc * line.qty;
-                const surchargePU = (totalNet > 0 && line.qty > 0) ? (extraCharges * (lineNet / totalNet)) / line.qty : 0;
-                const cost = unitAfterLineDisc * (1 - footerDiscountPct / 100) + surchargePU;
-
-                let shelfBeforeRound = cost * (1 + line.vat / 100) * (1 + markup / 100);
-                let finalShelf = shelfBeforeRound;
-                if (roundType === 'x9') finalShelf = roundX9(shelfBeforeRound);
-                else if (roundType === '05') finalShelf = Math.round(shelfBeforeRound * 20) / 20;
-
-                const realMarkup = (cost > 0) ? (((finalShelf / (1 + line.vat / 100)) / cost) - 1) * 100 : 0;
-                line.calculatedCost = cost; line.calculatedShelf = finalShelf;
-
-                const costCell = document.getElementById(`cost-${i}`);
-                const shelfCell = document.getElementById(`shelf-${i}`);
-                if (costCell) costCell.innerText = cost.toFixed(2) + "€";
-                if (shelfCell) shelfCell.innerHTML = `${finalShelf.toFixed(2)}€ <br><small style="color:#34c759">${realMarkup > 0 ? '+' : ''}${realMarkup.toFixed(0)}% mrg</small>`;
             });
         }
 
