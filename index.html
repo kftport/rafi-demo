@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ράφι – έκδοση demo</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            margin: 0; padding: 15px; background: #f5f5f7; color: #333; 
+        }
+        .screen { display: none; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); max-width: 500px; margin: 20px auto; }
+        .active { display: block; }
+        h1, h2, h3 { margin-top: 0; text-align: center; color: #111; }
+        button { background: #007aff; color: white; border: none; padding: 12px 20px; font-size: 16px; border-radius: 8px; width: 100%; cursor: pointer; font-weight: bold; margin-top: 10px; }
+        button:disabled { background: #999; cursor: not-allowed; }
+        .secondary-btn { background: #e5e5ea; color: #007aff; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #007aff; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .form-group { margin-bottom: 12px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 14px; }
+        input, select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; font-size: 16px; }
+        input:invalid { border-color: #ff3b30; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #f2f2f2; }
+        .error-msg { color: #ff3b30; font-weight: bold; text-align: center; }
+        .success-msg { color: #34c759; font-weight: bold; text-align: center; }
+        .heat-btn { margin: 5px 0; padding: 15px; font-size: 15px; text-align: center; border-radius: 8px; border: 2px solid #ccc; background: #fff; cursor: pointer; font-weight: bold; }
+        .heat-hot { border-color: #ff3b30; color: #ff3b30; }
+        .heat-warm { border-color: #ff9500; color: #ff9500; }
+        .heat-cold { border-color: #8e8e93; color: #8e8e93; }
+        .del-btn { background:#ff3b30; color:#fff; border:none; border-radius:6px; padding:4px 8px; font-size:12px; cursor:pointer; width:auto; margin:0; font-weight:bold; }
+        .row-error { background:#ffebee; }
+        .flag-badge { font-size:10px; padding:1px 5px; border-radius:4px; color:#fff; white-space:nowrap; }
+        .badge-err { background:#ff3b30; }
+        .banner { padding:10px; border-radius:8px; font-size:13px; margin-top:10px; }
+        .banner-info { background:#fff8e1; border:1px solid #ffd54f; }
+        .banner-ok { background:#e8f5e9; border:1px solid #81c784; }
+        .banner-error { background:#ffebee; border:1px solid #ef5350; color: #c62828; }
+        .toast { 
+            position: fixed; bottom: 20px; right: 20px; 
+            background: #333; color: white; padding: 15px 20px; 
+            border-radius: 8px; z-index: 9999; 
+            max-width: 300px; word-wrap: break-word;
+            animation: slideIn 0.3s ease-out;
+        }
+        .toast.error { background: #ff3b30; }
+        .toast.success { background: #34c759; }
+        @keyframes slideIn { from { transform: translateX(400px); } to { transform: translateX(0); } }
+    </style>
+</head>
+<body>
+
+    <div id="screen-start" class="screen active">
+        <h1>ράφι 📱</h1>
+        <p style="text-align:center;">Έκδοση Demo v2.0</p>
+        <button onclick="triggerFileInput()">Σάρωση τιμολογίου</button>
+        <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelect(event)">
+        <button class="secondary-btn" onclick="exportCSV()" style="margin-top:20px;">Εξαγωγή όλων (CSV)</button>
+    </div>
+
+    <div id="screen-loading" class="screen">
+        <h2>Ανάγνωση Τιμολογίου...</h2>
+        <div class="spinner"></div>
+        <p style="text-align:center; color:#666;">Παρακαλώ περιμένετε, το Claude AI επεξεργάζεται τα δεδομένα.</p>
+    </div>
+
+    <div id="screen-result" class="screen">
+        <h2>Στοιχεία Τιμολογίου</h2>
+        <div id="verify-banner"></div>
+        <div class="form-group"><label>Προμηθευτής</label><input type="text" id="inv-supplier"></div>
+        <div class="form-group"><label>Αρ. Τιμολογίου</label><input type="text" id="inv-number"></div>
+        <div class="form-group"><label>Ημερομηνία</label><input type="text" id="inv-date"></div>
+        
+        <hr>
+        <h3>Ρυθμίσεις Υπολογισμού</h3>
+        <div class="form-group"><label>Markup (%)</label><input type="number" id="ctrl-markup" value="30" oninput="calculatePrices()" min="0" max="500"></div>
+        <div class="form-group"><label>Επιβάρυνση εκτός ΦΠΑ (€)</label><input type="number" id="ctrl-charges" value="0" step="0.01" oninput="calculatePrices()" min="0"></div>
+        <div class="form-group"><label>Περιγραφή Επιβάρυνσης</label><input type="text" id="ctrl-charges-label"></div>
+        <div class="form-group"><label>Συνολική Έκπτωση Τιμολογίου (%)</label><input type="number" id="ctrl-discount" value="0" oninput="calculatePrices()" min="0" max="100"></div>
+        <div class="form-group">
+            <label>Στρογγυλοποίηση</label>
+            <select id="ctrl-round" onchange="calculatePrices()">
+                <option value="x9" selected>Στο πλησιέστερο .x9</option>
+                <option value="05">Στο πλησιέστερο 0.05</option>
+                <option value="none">Καμία</option>
+            </select>
+        </div>
+
+        <button onclick="addNewLine()" class="secondary-btn">+ Είδος</button>
+        <div style="overflow-x:auto;">
+            <table id="lines-table">
+                <thead>
+                    <tr>
+                        <th>Όνομα Είδους</th>
+                        <th>Ποσ.</th>
+                        <th>Καθ. Μονάδας (€)</th>
+                        <th>Έκπτ. %</th>
+                        <th>ΦΠΑ %</th>
+                        <th>Κόστος (€)</th>
+                        <th>Τιμή Ραφιού (€)</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="lines-body"></tbody>
+            </table>
+        </div>
+        <button onclick="goToCommit()">Συνέχεια (Τέλος Demo)</button>
+        <button class="secondary-btn" onclick="showScreen('screen-start')">← Νέα Φωτό</button>
+    </div>
+
+    <div id="screen-error" class="screen">
+        <h2>Σφάλμα Ανάγνωσης</h2>
+        <p class="error-msg" id="error-text">Δεν ήταν δυνατή η ανάγνωση του τιμολογίου.</p>
+        <p style="font-size:12px; color:#666;" id="error-detail"></p>
+        <button onclick="showScreen('screen-start')">← Νέα φωτό</button>
+        <button class="secondary-btn" onclick="manualEntry()">Καταχώρηση με το χέρι</button>
+    </div>
+
+    <div id="screen-commit" class="screen">
+        <h2>Καταγραφή Αντίδρασης</h2>
+        <div class="form-group"><label>Όνομα Καταστήματος</label><input type="text" id="commit-shop" placeholder="π.χ. Μπακάλικο Γιώργος" required></div>
+        <div class="form-group"><label>Κινητό (Προαιρετικό)</label><input type="tel" id="commit-phone" placeholder="69..." pattern="^[0-9\+\-\s]{0,20}$"></div>
+        
+        <label style="margin-top:15px;">Θερμότητα Ενδιαφέροντος</label>
+        <div class="heat-btn heat-hot" onclick="saveDemo('Έδωσε κινητό')">Έδωσε κινητό</div>
+        <div class="heat-btn heat-warm" onclick="saveDemo('Ενδιαφέρθηκε')">Ενδιαφέρθηκε</div>
+        <div class="heat-btn heat-cold" onclick="saveDemo('Αδιάφορος')">Αδιάφορος</div>
+        
+        <button class="secondary-btn" onclick="showScreen('screen-result')" style="margin-top:15px;">Πίσω στα αποτελέσματα</button>
+    </div>
+
+    <script>
+        let currentData = { supplier: '', date: '', number: '', totalNet: 0, footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
+        const SECRET_TOKEN = "demo123";
+
+        // ✅ Toast Notifications
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // ✅ Show/Hide screens
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+        }
+
+        function triggerFileInput() {
+            document.getElementById('file-input').click();
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // ✅ Validate file
+            if (!file.type.startsWith('image/')) {
+                showToast('Παρακαλώ διάλεξε εικόνα', 'error');
+                return;
+            }
+            if (file.size > 5 * 1024 * 1024) {
+                showToast('Η εικόνα είναι πολύ μεγάλη (max 5MB)', 'error');
+                return;
+            }
+
+            showScreen('screen-loading');
+            const reader = new FileReader();
+            
+            reader.onerror = function() {
+                setError("Δεν ήταν δυνατή η ανάγνωση του αρχείου. Δοκίμασε άλλη φωτογραφία.");
+            };
+
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onerror = function() {
+                    setError("Η φωτογραφία δεν φορτώθηκε (ίσως μορφή HEIC). Δοκίμασε: Ρυθμίσεις > Κάμερα > Μορφές > 'Πλέον συμβατό'.");
+                };
+                img.onload = function() {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 2400;
+                        let width = img.width, height = img.height;
+                        
+                        if (!width || !height) throw new Error('Μηδενικές διαστάσεις εικόνας');
+                        if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+                        
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+                        if (!dataUrl || dataUrl.length < 100) throw new Error('Αποτυχία μετατροπής');
+                        
+                        sendToBackend(dataUrl);
+                    } catch (err) {
+                        setError("Σφάλμα επεξεργασίας εικόνας: " + err.message);
+                    }
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function sendToBackend(base64Image) {
+            try {
+                const pureBase64 = base64Image.split(',')[1];
+                const response = await fetch(`/api/scan?k=${SECRET_TOKEN}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ imageBase64: pureBase64, mediaType: 'image/jpeg' })
+                });
+
+                const data = await response.json();
+
+                // ✅ FIXED: Check for errors EVEN if status is 200
+                if (data.error) {
+                    let errorMsg = data.message || 'Άγνωστο σφάλμα';
+                    let errorDetail = data.details || '';
+                    
+                    if (data.error === "anthropic_error") {
+                        errorMsg = "Σφάλμα σύνδεσης με το Claude API";
+                    } else if (data.error === "parse_error") {
+                        errorMsg = "Η εικόνα δεν αναγνωρίστηκε ως τιμολόγιο";
+                    } else if (data.error === "invalid_image") {
+                        errorMsg = "Η εικόνα δεν είναι έγκυρη";
+                    }
+                    
+                    setError(errorMsg, errorDetail);
+                    return;
+                }
+
+                if (!response.ok) {
+                    setError(`Σφάλμα API (${response.status})`);
+                    return;
+                }
+
+                // ✅ Success - populate form
+                currentData = {
+                    supplier: data.supplier || '', 
+                    date: data.date || '', 
+                    number: data.number || '',
+                    totalNet: data.totalNet || 0,
+                    footerDiscountPct: data.footerDiscountPct || 0,
+                    extraCharges: data.extraCharges || 0, 
+                    extraChargesLabel: data.extraChargesLabel || '',
+                    lines: (data.lines || []).map(l => ({
+                        name: l.name || '', 
+                        qty: l.qty || 0, 
+                        netUnit: l.netUnit || 0,
+                        vat: (l.vat !== undefined && l.vat !== null) ? l.vat : 24,
+                        discountPct: l.discountPct || 0, 
+                        lineValue: l.lineValue || 0,
+                        flags: l._flags || []
+                    }))
+                };
+                
+                populateForm();
+                showScreen('screen-result');
+                showToast('✓ Τιμολόγιο διαβάστηκε επιτυχώς', 'success');
+
+            } catch (err) {
+                setError("Αποτυχία: " + err.message);
+            }
+        }
+
+        function setError(message, details = '') {
+            document.getElementById('error-text').innerText = message;
+            document.getElementById('error-detail').innerText = details;
+            showScreen('screen-error');
+            showToast('❌ ' + message, 'error');
+        }
+
+        function renderBanner() {
+            const banner = document.getElementById('verify-banner');
+            const errs = currentData.lines.filter(l => l.flags && l.flags.includes('mismatch')).length;
+
+            let liveGap = 0;
+            if (currentData.totalNet > 0) {
+                let sum = 0;
+                currentData.lines.forEach(l => { sum += l.netUnit * l.qty * (1 - (l.discountPct||0)/100); });
+                liveGap = Math.round((currentData.totalNet - sum) * 100) / 100;
+            }
+
+            let html = '';
+            if (Math.abs(liveGap) > 0.20) {
+                const what = liveGap > 0 ? 'λείπει' : 'περισσεύει';
+                html += `<div class="banner banner-info">⚠ Το άθροισμα των γραμμών δεν συμφωνεί με το σύνολο του τιμολογίου (${currentData.totalNet.toFixed(2)}€). <b>${what} ${Math.abs(liveGap).toFixed(2)}€</b> — ${liveGap > 0 ? 'μάλλον λείπει μια γραμμή, πρόσθεσέ την με το «+ Είδος»' : 'έλεγξε αν υπάρχει γραμμή παραπάνω'}.</div>`;
+            }
+            if (errs > 0) {
+                html += `<div class="banner banner-info">⚠ <b>${errs}</b> γραμμές χρειάζονται έλεγχο (κόκκινες).</div>`;
+            }
+            if (!html && currentData.lines.length > 0) {
+                html = `<div class="banner banner-ok">✓ Όλες οι γραμμές επαληθεύτηκαν και το άθροισμα κλείνει με το τιμολόγιο.</div>`;
+            }
+            banner.innerHTML = html;
+        }
+
+        function populateForm() {
+            document.getElementById('inv-supplier').value = currentData.supplier || '';
+            document.getElementById('inv-number').value = currentData.number || '';
+            document.getElementById('inv-date').value = currentData.date || '';
+            document.getElementById('ctrl-charges').value = currentData.extraCharges || 0;
+            document.getElementById('ctrl-charges-label').value = currentData.extraChargesLabel || '';
+            document.getElementById('ctrl-discount').value = currentData.footerDiscountPct || 0;
+            renderLines();
+            renderBanner();
+        }
+
+        function manualEntry() {
+            currentData = { supplier: '', date: '', number: '', totalNet: 0, footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
+            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, flags: [] });
+            populateForm();
+            showScreen('screen-result');
+        }
+
+        function addNewLine() {
+            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, flags: [] });
+            renderLines(); 
+            renderBanner();
+            showToast('✓ Νέα γραμμή προστέθηκε', 'success');
+        }
+
+        function removeLine(index) {
+            currentData.lines.splice(index, 1);
+            renderLines(); 
+            renderBanner();
+            showToast('✓ Γραμμή διαγράφηκε', 'success');
+        }
+
+        function updateLineData(index, field, value) {
+            if (field === 'name') {
+                currentData.lines[index][field] = value.trim();
+            } else {
+                if (value === '') {
+                    currentData.lines[index][field] = 0;
+                } else {
+                    const numValue = parseFloat(value);
+                    if (!isNaN(numValue)) {
+                        currentData.lines[index][field] = numValue;
+                    }
+                }
+            }
+            currentData.lines[index].flags = [];
+            renderBanner();
+            if (field !== 'name') {
+                updateRowValues(index);
+            }
+        }
+
+        function calculatePrices() {
+            currentData.lines.forEach((_, index) => updateRowValues(index));
+        }
+
+        function computeRow(line) {
+            const markup = parseFloat(document.getElementById('ctrl-markup').value) || 0;
+            const extraCharges = parseFloat(document.getElementById('ctrl-charges').value) || 0;
+            const footerDiscountPct = parseFloat(document.getElementById('ctrl-discount').value) || 0;
+            const roundType = document.getElementById('ctrl-round').value;
+
+            let totalNet = 0;
+            currentData.lines.forEach(l => {
+                totalNet += (l.netUnit * (1 - (l.discountPct || 0) / 100) * l.qty);
+            });
+
+            const unitAfterLineDisc = line.netUnit * (1 - (line.discountPct || 0) / 100);
+            const lineNet = unitAfterLineDisc * line.qty;
+            const surchargePU = (totalNet > 0 && line.qty > 0) ? (extraCharges * (lineNet / totalNet)) / line.qty : 0;
+            const cost = unitAfterLineDisc * (1 - footerDiscountPct / 100) + surchargePU;
+
+            let shelfBeforeRound = cost * (1 + line.vat / 100) * (1 + markup / 100);
+            let finalShelf = shelfBeforeRound;
+            if (roundType === 'x9') finalShelf = roundX9(shelfBeforeRound);
+            else if (roundType === '05') finalShelf = Math.round(shelfBeforeRound * 20) / 20;
+
+            const realMarkup = (cost > 0) ? (((finalShelf / (1 + line.vat / 100)) / cost) - 1) * 100 : 0;
+            return { cost, finalShelf, realMarkup };
+        }
+
+        function updateRowValues(index) {
+            const row = document.querySelector(`#lines-body tr[data-index='${index}']`);
+            if (!row) return;
+            const line = currentData.lines[index];
+            const r = computeRow(line);
+            const costCell = row.querySelector('.line-cost');
+            const shelfCell = row.querySelector('.line-shelf');
+            if (costCell) costCell.textContent = `${r.cost.toFixed(2)}€`;
+            if (shelfCell) shelfCell.innerHTML = `${r.finalShelf.toFixed(2)}€ <br><small style="color:#34c759">${r.realMarkup > 0 ? '+' : ''}${r.realMarkup.toFixed(0)}% mrg</small>`;
+        }
+
+        function renderLines() {
+            const body = document.getElementById('lines-body');
+            body.innerHTML = '';
+            if (currentData.lines.length === 0) {
+                body.innerHTML = '<tr><td colspan="8" style="text-align:center; color:#999;">Κανένα είδος ακόμα. Κάνε κλικ «+ Είδος»</td></tr>';
+                return;
+            }
+            
+            currentData.lines.forEach((line, i) => {
+                const flags = line.flags || [];
+                const isErr = flags.includes('mismatch');
+                const tr = document.createElement('tr');
+                tr.dataset.index = i;
+                tr.className = isErr ? 'row-error' : '';
+                const badge = isErr ? '<span class="flag-badge badge-err">έλεγξε</span>' : '';
+                const r = computeRow(line);
+                tr.innerHTML = `
+                    <td><input type="text" value="${escapeHtml(line.name)}" oninput="updateLineData(${i}, 'name', this.value)">${badge}</td>
+                    <td><input type="number" value="${line.qty}" style="width:50px" oninput="updateLineData(${i}, 'qty', this.value)" min="0"></td>
+                    <td><input type="number" value="${line.netUnit}" step="0.01" style="width:70px" oninput="updateLineData(${i}, 'netUnit', this.value)" min="0"></td>
+                    <td><input type="number" value="${line.discountPct}" step="0.01" style="width:60px" oninput="updateLineData(${i}, 'discountPct', this.value)" min="0" max="100"></td>
+                    <td>
+                        <select style="width:60px" onchange="updateLineData(${i}, 'vat', this.value)">
+                            <option value="24" ${line.vat == 24 ? 'selected' : ''}>24%</option>
+                            <option value="13" ${line.vat == 13 ? 'selected' : ''}>13%</option>
+                            <option value="6" ${line.vat == 6 ? 'selected' : ''}>6%</option>
+                            <option value="0" ${line.vat == 0 ? 'selected' : ''}>0%</option>
+                        </select>
+                    </td>
+                    <td class="line-cost">${r.cost.toFixed(2)}€</td>
+                    <td class="line-shelf" style="font-weight:bold; color:#007aff;">${r.finalShelf.toFixed(2)}€ <br><small style="color:#34c759">${r.realMarkup > 0 ? '+' : ''}${r.realMarkup.toFixed(0)}% mrg</small></td>
+                    <td><button class="del-btn" onclick="removeLine(${i})">✕</button></td>
+                `;
+                body.appendChild(tr);
+            });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function roundX9(x) {
+            let cents = Math.round(x * 100), candidates = [];
+            for (let k of [-1, 0, 1]) candidates.push((Math.floor(cents / 10) + k) * 10 + 9);
+            let closest = candidates.reduce((p, c) => Math.abs(c - cents) < Math.abs(p - cents) ? c : p);
+            return closest / 100;
+        }
+
+        function goToCommit() {
+            if (currentData.lines.length === 0) {
+                showToast('⚠ Πρέπει να υπάρχει τουλάχιστον μια γραμμή', 'error');
+                return;
+            }
+            showScreen('screen-commit');
+        }
+
+        function saveDemo(heat) {
+            const shopName = document.getElementById('commit-shop').value?.trim();
+            if (!shopName) {
+                showToast('⚠ Παρακαλώ εισήγαγε το όνομα του καταστήματος', 'error');
+                return;
+            }
+
+            const phone = document.getElementById('commit-phone').value?.trim() || '';
+            const demoRecord = {
+                datetime: new Date().toISOString(),
+                supplier: document.getElementById('inv-supplier').value,
+                number: document.getElementById('inv-number').value,
+                date: document.getElementById('inv-date').value,
+                markupUsed: document.getElementById('ctrl-markup').value,
+                extraCharges: document.getElementById('ctrl-charges').value,
+                shopName, phone, heat, linesCount: currentData.lines.length
+            };
+            
+            try {
+                let demos = JSON.parse(localStorage.getItem('rafi_demos') || '[]');
+                demos.push(demoRecord);
+                localStorage.setItem('rafi_demos', JSON.stringify(demos));
+                
+                showToast('✓ Το demo αποθηκεύτηκε επιτυχώς!', 'success');
+                document.getElementById('commit-shop').value = '';
+                document.getElementById('commit-phone').value = '';
+                document.getElementById('file-input').value = '';
+                showScreen('screen-start');
+            } catch (err) {
+                showToast('❌ Σφάλμα αποθήκευσης: ' + err.message, 'error');
+            }
+        }
+
+        function exportCSV() {
+            try {
+                let demos = JSON.parse(localStorage.getItem('rafi_demos') || '[]');
+                if (demos.length === 0) { 
+                    showToast('⚠ Δεν υπάρχουν αποθηκευμένα δεδομένα', 'error');
+                    return; 
+                }
+                
+                let csvContent = "\uFEFF";
+                csvContent += "Ημερομηνία;Κατάστημα;Κινητό;Θερμότητα;Προμηθευτής;Αρ. τιμολογίου;Πλήθος ειδών;Markup\n";
+                demos.forEach(d => {
+                    csvContent += [d.datetime.split('T')[0], d.shopName, d.phone, d.heat, d.supplier, d.number, d.linesCount, d.markupUsed + "%"]
+                        .map(t => `"${String(t).replace(/"/g, '""')}"`).join(";") + "\n";
+                });
+                
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.setAttribute("href", url);
+                link.setAttribute("download", `rafi_demos_export_${new Date().toISOString().split('T')[0]}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                showToast('✓ CSV εξαγωγή ολοκληρώθηκε', 'success');
+            } catch (err) {
+                showToast('❌ Σφάλμα εξαγωγής: ' + err.message, 'error');
+            }
+        }
+
+        // Initialize
+        renderLines();
+    </script>
+</body>
+</html>
