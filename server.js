@@ -4,6 +4,7 @@ const path = require('path');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const scanHandler = require('./api/scan');
+const enrichHandler = require('./api/enrich');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -168,6 +169,15 @@ app.post('/api/update-heat', async (req, res, next) => {
     }
 
     return res.status(200).json({ success: true, updated: invoice_ids.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/enrich', async (req, res, next) => {
+  try {
+    const enrichHandler = require('./api/enrich');
+    return Promise.resolve(enrichHandler(req, res)).catch(next);
   } catch (err) {
     next(err);
   }
