@@ -59,6 +59,7 @@
         <button onclick="triggerFileInput()">Σάρωση τιμολογίου</button>
         <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelect(event)">
         <button class="secondary-btn" onclick="exportCSV()" style="margin-top:20px;">Εξαγωγή όλων (CSV)</button>
+        <button class="secondary-btn" onclick="startProductEnrichment()" style="margin-top:10px;">Εμπλουτισμός προϊόντων</button>
         <button class="secondary-btn" onclick="showScreen('screen-commit')" style="margin-top:10px;">Τέλος Demo</button>
     </div>
 
@@ -464,6 +465,43 @@
                 return;
             }
             showScreen('screen-commit');
+        }
+
+        async function startProductEnrichment() {
+            let totalChecked = 0;
+            let totalFound = 0;
+            let totalNotFound = 0;
+            try {
+                while (true) {
+                    const response = await fetch('/api/enrich', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    const result = await response.json();
+
+                    if (!response.ok || result.error) {
+                        const message = result.message || 'Αποτυχία εμπλουτισμού προϊόντων';
+                        showToast(`❌ ${message}`, 'error');
+                        return;
+                    }
+
+                    totalChecked += result.checked || 0;
+                    totalFound += result.found || 0;
+                    totalNotFound += result.notFound || 0;
+
+                    if ((result.checked || 0) === 0) {
+                        break;
+                    }
+
+                    if ((result.checked || 0) < 20) {
+                        break;
+                    }
+                }
+
+                alert(`Εμπλουτισμός ολοκληρώθηκε\nΕλεγμένα barcodes: ${totalChecked}\nΒρέθηκαν: ${totalFound}\nΔεν βρέθηκαν: ${totalNotFound}`);
+            } catch (err) {
+                showToast('❌ Σφάλμα εμπλουτισμού: ' + err.message, 'error');
+            }
         }
 
         async function saveInvoice() {
