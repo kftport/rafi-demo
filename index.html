@@ -509,8 +509,15 @@
                 });
                 const result = await response.json();
                 if (!response.ok || result.error) {
-                    const message = result.message || 'Αποτυχία αποθήκευσης στο backend';
-                    showToast(`❌ ${message}`, 'error');
+                    // Build detailed error message from Supabase/backend
+                    const parts = [];
+                    if (result.message) parts.push(result.message);
+                    if (result.details) parts.push(typeof result.details === 'string' ? result.details : JSON.stringify(result.details));
+                    if (result.hint) parts.push('hint: ' + result.hint);
+                    if (result.code) parts.push('code: ' + result.code);
+                    const full = parts.join(' | ') || `HTTP ${response.status}`;
+                    // Display full error on screen so user can inspect exact failure
+                    setError('Αποτυχία αποθήκευσης', full);
                     return;
                 }
 

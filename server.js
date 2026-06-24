@@ -10,7 +10,12 @@ const port = process.env.PORT || 3000;
 
 console.log("SUPABASE_URL =", process.env.SUPABASE_URL);
 console.log("SUPABASE_SERVICE_KEY =", process.env.SUPABASE_SERVICE_KEY ? '***' : undefined);
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+let supabase = null;
+const getSupabase = () => {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) return null;
+  if (!supabase) supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+  return supabase;
+};
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -28,8 +33,10 @@ app.post('/api/scan', (req, res, next) => {
 
 app.post('/api/save', async (req, res, next) => {
   try {
-    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
-      return res.status(500).json({ error: 'supabase_not_configured', message: 'Supabase environment variables are missing' });
+    const sup = getSupabase();
+    if (!sup) {
+      console.error('Supabase not configured: missing SUPABASE_URL or SUPABASE_SERVICE_KEY');
+      return res.status(500).json({ error: 'supabase_not_configured', message: 'Λείπουν τα κλειδιά Supabase στο περιβάλλον' });
     }
 
     const {
@@ -75,14 +82,21 @@ app.post('/api/save', async (req, res, next) => {
       owner: String(owner || '')
     };
 
-    const { data: insertedInvoice, error: invoiceError } = await supabase
+    const { data: insertedInvoice, error: invoiceError } = await sup
       .from('invoices')
       .insert(invoicePayload)
       .select('id')
       .single();
 
     if (invoiceError) {
-      return res.status(500).json({ error: 'supabase_insert_failed', message: invoiceError.message, details: invoiceError });
+      console.error('Supabase invoice insert error:', invoiceError);
+      return res.status(500).json({
+        error: 'supabase_insert_failed',
+        message: invoiceError.message || 'Supabase insert error',
+        details: invoiceError.details || invoiceError,
+        hint: invoiceError.hint,
+        code: invoiceError.code
+      });
     }
 
     const invoiceId = insertedInvoice.id;
@@ -98,10 +112,17 @@ app.post('/api/save', async (req, res, next) => {
       barcode: String(line.barcode || '')
     }));
 
-    const { error: linesError } = await supabase.from('invoice_lines').insert(lineItems);
+    const { error: linesError } = await sup.from('invoice_lines').insert(lineItems);
     if (linesError) {
-      await supabase.from('invoices').delete().eq('id', invoiceId);
-      return res.status(500).json({ error: 'supabase_insert_failed', message: linesError.message, details: linesError });
+      console.error('Supabase invoice_lines insert error:', linesError);
+      await sup.from('invoices').delete().eq('id', invoiceId);
+      return res.status(500).json({
+        error: 'supabase_insert_failed',
+        message: linesError.message || 'Supabase insert lines error',
+        details: linesError.details || linesError,
+        hint: linesError.hint,
+        code: linesError.code
+      });
     }
 
     return res.status(200).json({ success: true, invoice_id: invoiceId });
@@ -120,17 +141,30 @@ app.post('/api/update-heat', async (req, res, next) => {
       return res.status(400).json({ error: 'invalid_payload', message: 'heat must be a string' });
     }
 
+    const sup = getSupabase();
+    if (!sup) {
+      console.error('Supabase not configured: missing SUPABASE_URL or SUPABASE_SERVICE_KEY');
+      return res.status(500).json({ error: 'supabase_not_configured', message: 'Λείπουν τα κλειδιά Supabase στο περιβάλλον' });
+    }
+
     const updatePayload = { heat: String(heat) };
     if (shop_name !== undefined) updatePayload.shop_name = String(shop_name || '');
     if (shop_phone !== undefined) updatePayload.shop_phone = String(shop_phone || '');
 
-    const { error } = await supabase
+    const { error } = await sup
       .from('invoices')
       .update(updatePayload)
       .in('id', invoice_ids);
 
     if (error) {
-      return res.status(500).json({ error: 'supabase_update_failed', message: error.message, details: error });
+      console.error('Supabase update error:', error);
+      return res.status(500).json({
+        error: 'supabase_update_failed',
+        message: error.message || 'Supabase update error',
+        details: error.details || error,
+        hint: error.hint,
+        code: error.code
+      });
     }
 
     return res.status(200).json({ success: true, updated: invoice_ids.length });
