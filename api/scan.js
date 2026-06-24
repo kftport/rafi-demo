@@ -106,6 +106,14 @@ function parseResponse(apiResponse) {
 
     let raw = textContent.map(b => b.text).join("");
     raw = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+        throw new Error("Failed to find JSON object in Claude's response");
+    }
+
+    raw = raw.slice(firstBrace, lastBrace + 1).trim();
     
     let parsed;
     try {
@@ -157,6 +165,8 @@ function buildLines(parsed) {
             discounts: discounts,
             vat: (l.vat !== undefined && l.vat !== null && l.vat !== '') ? parseFloat(l.vat) : 24,
             lineValue: lineValue,
+            productCode: String(l.productCode || ''),
+            barcode: String(l.barcode || ''),
             _flags: bad ? ['mismatch'] : []
         };
     }).filter(l => l.qty > 0);
@@ -183,7 +193,7 @@ function normalizeTotalNet(parsed, lines) {
     return originalTotalNet;
 }
 
-const BASE_PROMPT = `Διαβάζεις ελληνικά τιμολόγια χονδρικής. Διάβασε ΜΟΝΟ τα παρακάτω, με μέγιστη ακρίβεια. ΜΗΝ ασχοληθείς με τις στήλες εκπτώσεων — δεν τις χρειάζομαι.
+const BASE_PROMPT = `Διαβάζεις ελληνικά τιμολόγια χονδρικής. Διάβασε ΜΟΝΟ τα παρακάτω, με μέγιστη ακρίβεια. Επίστρεψε ΜΟΝΟ το JSON, χωρίς καμία εισαγωγική ή επεξηγηματική πρόταση πριν ή μετά. ΜΗΝ ασχοληθείς με τις στήλες εκπτώσεων — δεν τις χρειάζομαι.
 
 ΕΞΑΙΡΕΤΙΚΑ ΣΗΜΑΝΤΙΚΟ (ΔΙΑΒΑΣΕ ΠΡΩΤΑ ΑΥΤΟ): Η στήλη με τίτλο "ΑΞΙΑ" ή "ΚΑΘ.ΑΞΙΑ" (η στήλη ΜΕΤΑ τις εκπτώσεις) είναι Η ΠΗΓΗ ΤΗΣ ΑΞΙΑΣ κάθε γραμμής. ΠΡΟΣΔΙΟΡΙΣΕ ΠΟΛΥ ΠΡΟΣΕΚΤΙΚΑ ΑΥΤΟΝ ΤΟΝ ΑΡΙΘΜΟ ΓΙΑ ΚΑΘΕ ΓΡΑΜΜΗ — ΜΗΝ τον μαντέψεις ή μην τον υπολογίσεις αποκλειστικά από qty×netUnit.
 
@@ -198,6 +208,8 @@ const BASE_PROMPT = `Διαβάζεις ελληνικά τιμολόγια χο
 4. "lineValue": η ΑΞΙΑ της γραμμής ΜΕΤΑ τις εκπτώσεις (στήλη ΑΞΙΑ/ΚΑΘ.ΑΞΙΑ). ΠΡΟΤΙΜΑ τον αριθμό ΠΟΥ ΕΜΦΑΝΙΖΕΤΑΙ ΣΤΗΝ ΣΤΗΛΗ ΑΞΙΑ/ΚΑΘ.ΑΞΙΑ — ακόμα κι αν διαφέρει από qty×netUnit λόγω εκπτώσεων/στρογγυλοποιήσεων. Διαβάσε το πολύ προσεκτικά και επέστρεψέ το ΑΚΡΙΒΩΣ όπως εμφανίζεται.
 5. "discounts": λίστα με τα ποσοστά έκπτωσης της γραμμής, με τη σειρά που εμφανίζονται στην στήλη έκπτωσης (π.χ. [2.20, 18, 3]). Αν δεν υπάρχουν εκπτώσεις, βάλε [] και όχι null.
 6. "vat": το ποσοστό ΦΠΑ της γραμμής (στήλη ΦΠΑ%, συνήθως 6/13/24).
+7. "productCode": ο κωδικός είδους του προμηθευτή από τη στήλη "ΚΩΔΙΚΟΣ" — αν δεν υπάρχει, βάλε "".
+8. "barcode": το barcode/EAN του προϊόντος (8-13 ψηφία) — αν δεν υπάρχει, βάλε "".
 
 ΕΠΙΠΛΕΟΝ ΕΛΕΓΧΟΣ: μετά που θα έχεις διαβάσει ΟΛΕΣ τις γραμμές, υπολόγισε το άθροισμα των "lineValue". Αυτό το άθροισμα ΠΡΕΠΕΙ να ισούται ΑΚΡΙΒΩΣ (ή μέσα σε πολύ μικρό στρογγυλοποιητικό περιθώριο) με το "totalNet" που βλέπεις στο τιμολόγιο. Αν δεν ισούται, ΕΠΑΝΑΔΙΑΒΑΣΕ ΟΛΟ ΤΟ ΤΙΜΟΛΟΓΙΟ και διόρθωσε τα "lineValue" ώστε το άθροισμα να συμφωνεί με το "totalNet". Μην επιχειρήσεις να «διορθώσεις» τις γραμμές με βάση υπολογισμούς — προτίμησε πάντα την τιμή που εμφανίζεται στην στήλη ΑΞΙΑ/ΚΑΘ.ΑΞΙΑ.
 
@@ -227,7 +239,7 @@ const BASE_PROMPT = `Διαβάζεις ελληνικά τιμολόγια χο
 - ΜΟΝΟ έγκυρο JSON, χωρίς markdown/σχόλια.
 
 Δομή:
-{"supplier":"","date":"","number":"","footerDiscountPct":0,"extraCharges":0,"extraChargesLabel":"","totalNet":0,"lines":[{"name":"","qty":0,"netUnit":0,"lineValue":0,"discounts":[],"vat":0}]}`;
+{"supplier":"","date":"","number":"","customerName":"","customerVat":"","customerAddress":"","customerPhone":"","footerDiscountPct":0,"extraCharges":0,"extraChargesLabel":"","totalNet":0,"lines":[{"name":"","qty":0,"netUnit":0,"lineValue":0,"discounts":[],"vat":0,"productCode":"","barcode":""}]} `;
 
 module.exports = async (req, res) => {
     const { k } = req.query;
@@ -250,10 +262,10 @@ module.exports = async (req, res) => {
             return res.status(400).json({ error: "invalid_image", message: imgValidation.error });
         }
 
-        // 1η ανάγνωση με Haiku
+        // 1η ανάγνωση με Sonnet
         let apiResponse;
         try {
-            apiResponse = await callClaude("claude-haiku-4-5-20251001", BASE_PROMPT, imageBase64, mediaType);
+            apiResponse = await callClaude("claude-sonnet-4-6", BASE_PROMPT, imageBase64, mediaType);
         } catch (e) {
             return res.status(500).json({ 
                 error: "anthropic_request_failed", 
@@ -291,7 +303,7 @@ module.exports = async (req, res) => {
         if (problemCount > 0 || totals.mismatch) {
             try {
                 const retryPrompt = BASE_PROMPT + "\n\nΠΡΟΣΟΧΗ: ΣΤΗΝ ΠΡΟΗΓΟΥΜΕΝΗ ΑΝΑΓΝΩΣΗ ΤΟ ΑΘΡΟΙΣΜΑ ΤΩΝ `lineValue` ΔΕΝ ΣΥΜΦΩΝΟΥΣΕ ΜΕ ΤΟ `totalNet`. ΠΡΟΣΟΧΗ: ΠΡΟΤΙΜΗΣΕ ΠΑΝΤΑ ΤΟΝ ΟΡΘΟ ΑΡΙΘΜΟ ΠΟΥ ΕΜΦΑΝΙΖΕΤΑΙ ΣΤΗΝ ΣΤΗΛΗ 'ΑΞΙΑ'/'ΚΑΘ.ΑΞΙΑ' ΓΙΑ ΚΑΘΕ ΓΡΑΜΜΗ. ΞΑΝΑΔΙΑΒΑΣΕ ΟΛΟ ΤΟ ΤΙΜΟΛΟΓΙΟ ΚΑΙ ΕΠΙΒΕΒΑΙΩΣΕ ΟΤΙ ΤΟ ΑΘΡΟΙΣΜΑ ΤΩΝ `lineValue` ΙΣΟΥΤΑΙ ΜΕ ΤΟ `totalNet`. ΕΠΙΣΗΣ: ΜΗΝ ΣΥΓΧΩΝΕΥΕΙΣ ΠΑΝΟΜΟΙΟΤΥΠΕΣ ΓΡΑΜΜΕΣ — ΕΠΙΣΤΡΕΨΕ ΤΙΣ ΟΛΕΣ ΞΕΧΩΡΙΣΤΑ.";
-                const retry = await callClaude("claude-opus-4-1-20250805", retryPrompt, imageBase64, mediaType);
+                const retry = await callClaude("claude-opus-4-8", retryPrompt, imageBase64, mediaType);
                 if (retry.status === 200) {
                     try {
                         const reparsed = parseResponse(retry);
@@ -318,6 +330,10 @@ module.exports = async (req, res) => {
         // ✅ FIXED: Return proper 200 only on success
         return res.status(200).json({
             supplier: parsed.supplier || '',
+            customerName: parsed.customerName || '',
+            customerVat: parsed.customerVat || '',
+            customerAddress: parsed.customerAddress || '',
+            customerPhone: parsed.customerPhone || '',
             date: parsed.date || '',
             number: parsed.number || '',
             footerDiscountPct: parseFloat(parsed.footerDiscountPct) || 0,

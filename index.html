@@ -59,12 +59,13 @@
         <button onclick="triggerFileInput()">Σάρωση τιμολογίου</button>
         <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelect(event)">
         <button class="secondary-btn" onclick="exportCSV()" style="margin-top:20px;">Εξαγωγή όλων (CSV)</button>
+        <button class="secondary-btn" onclick="showScreen('screen-commit')" style="margin-top:10px;">Τέλος Demo</button>
     </div>
 
     <div id="screen-loading" class="screen">
         <h2>Ανάγνωση Τιμολογίου...</h2>
         <div class="spinner"></div>
-        <p style="text-align:center; color:#666;">Παρακαλώ περιμένετε, το Claude AI επεξεργάζεται τα δεδομένα.</p>
+        <p style="text-align:center; color:#666;">Υπολογισμός τιμής στο ράφι</p>
     </div>
 
     <div id="screen-result" class="screen">
@@ -95,6 +96,8 @@
                 <thead>
                     <tr>
                         <th>Όνομα Είδους</th>
+                        <th>Κωδικός</th>
+                        <th>Barcode</th>
                         <th>Ποσ.</th>
                         <th>Καθ. Μονάδας (€)</th>
                         <th>Έκπτ. %</th>
@@ -107,7 +110,7 @@
                 <tbody id="lines-body"></tbody>
             </table>
         </div>
-        <button onclick="goToCommit()">Συνέχεια (Τέλος Demo)</button>
+        <button onclick="saveInvoice()">Συνέχεια</button>
         <button class="secondary-btn" onclick="showScreen('screen-start')">← Νέα Φωτό</button>
     </div>
 
@@ -133,7 +136,8 @@
     </div>
 
     <script>
-        let currentData = { supplier: '', date: '', number: '', totalNet: 0, footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
+        let currentData = { supplier: '', customerName: '', customerVat: '', customerAddress: '', customerPhone: '', date: '', number: '', totalNet: 0, footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
+        const sessionId = `session_${Date.now()}`;
         const SECRET_TOKEN = "demo123";
 
         // ✅ Toast Notifications
@@ -219,7 +223,7 @@
                     body: JSON.stringify({ imageBase64: pureBase64, mediaType: 'image/jpeg' })
                 });
 
-                const data = await response.json();
+                        const data = await response.json();
 
                 // ✅ FIXED: Check for errors EVEN if status is 200
                 if (data.error) {
@@ -246,6 +250,10 @@
                 // ✅ Success - populate form
                 currentData = {
                     supplier: data.supplier || '', 
+                    customerName: data.customerName || '',
+                    customerVat: data.customerVat || '',
+                    customerAddress: data.customerAddress || '',
+                    customerPhone: data.customerPhone || '',
                     date: data.date || '', 
                     number: data.number || '',
                     totalNet: data.totalNet || 0,
@@ -259,6 +267,8 @@
                         vat: (l.vat !== undefined && l.vat !== null) ? l.vat : 24,
                         discountPct: l.discountPct || 0, 
                         lineValue: l.lineValue || 0,
+                        productCode: l.productCode || '',
+                        barcode: l.barcode || '',
                         flags: l._flags || []
                     }))
                 };
@@ -317,13 +327,13 @@
 
         function manualEntry() {
             currentData = { supplier: '', date: '', number: '', totalNet: 0, footerDiscountPct: 0, extraCharges: 0, extraChargesLabel: '', lines: [] };
-            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, flags: [] });
+            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, productCode: '', barcode: '', flags: [] });
             populateForm();
             showScreen('screen-result');
         }
 
         function addNewLine() {
-            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, flags: [] });
+            currentData.lines.push({ name: '', qty: 1, netUnit: 0, vat: 24, discountPct: 0, lineValue: 0, productCode: '', barcode: '', flags: [] });
             renderLines(); 
             renderBanner();
             showToast('✓ Νέα γραμμή προστέθηκε', 'success');
@@ -337,7 +347,7 @@
         }
 
         function updateLineData(index, field, value) {
-            if (field === 'name') {
+            if (field === 'name' || field === 'productCode' || field === 'barcode') {
                 currentData.lines[index][field] = value.trim();
             } else {
                 if (value === '') {
@@ -351,7 +361,7 @@
             }
             currentData.lines[index].flags = [];
             renderBanner();
-            if (field !== 'name') {
+            if (field !== 'name' && field !== 'productCode' && field !== 'barcode') {
                 updateRowValues(index);
             }
         }
@@ -400,7 +410,7 @@
             const body = document.getElementById('lines-body');
             body.innerHTML = '';
             if (currentData.lines.length === 0) {
-                body.innerHTML = '<tr><td colspan="8" style="text-align:center; color:#999;">Κανένα είδος ακόμα. Κάνε κλικ «+ Είδος»</td></tr>';
+                body.innerHTML = '<tr><td colspan="10" style="text-align:center; color:#999;">Κανένα είδος ακόμα. Κάνε κλικ «+ Είδος»</td></tr>';
                 return;
             }
             
@@ -414,6 +424,8 @@
                 const r = computeRow(line);
                 tr.innerHTML = `
                     <td><input type="text" value="${escapeHtml(line.name)}" oninput="updateLineData(${i}, 'name', this.value)">${badge}</td>
+                    <td><input type="text" value="${escapeHtml(line.productCode)}" style="width:110px" oninput="updateLineData(${i}, 'productCode', this.value)"></td>
+                    <td><input type="text" value="${escapeHtml(line.barcode)}" style="width:110px" oninput="updateLineData(${i}, 'barcode', this.value)"></td>
                     <td><input type="number" value="${line.qty}" style="width:50px" oninput="updateLineData(${i}, 'qty', this.value)" min="0"></td>
                     <td><input type="number" value="${line.netUnit}" step="0.01" style="width:70px" oninput="updateLineData(${i}, 'netUnit', this.value)" min="0"></td>
                     <td><input type="number" value="${line.discountPct}" step="0.01" style="width:60px" oninput="updateLineData(${i}, 'discountPct', this.value)" min="0" max="100"></td>
@@ -454,7 +466,112 @@
             showScreen('screen-commit');
         }
 
-        function saveDemo(heat) {
+        async function saveInvoice() {
+            if (currentData.lines.length === 0) {
+                showToast('⚠ Πρέπει να υπάρχει τουλάχιστον μια γραμμή', 'error');
+                return;
+            }
+
+            const invoicePayload = {
+                supplier: document.getElementById('inv-supplier').value,
+                customerName: currentData.customerName || '',
+                customerVat: currentData.customerVat || '',
+                customerAddress: currentData.customerAddress || '',
+                customerPhone: currentData.customerPhone || '',
+                invoice_number: document.getElementById('inv-number').value,
+                invoice_date: document.getElementById('inv-date').value,
+                total_net: parseFloat(currentData.totalNet) || 0,
+                footer_discount_pct: parseFloat(document.getElementById('ctrl-discount').value) || 0,
+                extra_charges: parseFloat(document.getElementById('ctrl-charges').value) || 0,
+                extra_charges_label: document.getElementById('ctrl-charges-label').value || '',
+                shop_name: '',
+                shop_phone: '',
+                heat: '',
+                markup_used: parseFloat(document.getElementById('ctrl-markup').value) || 0,
+                owner: '',
+                lines: currentData.lines.map(l => ({
+                    name: l.name || '',
+                    qty: l.qty || 0,
+                    netUnit: l.netUnit || 0,
+                    discountPct: l.discountPct || 0,
+                    vat: l.vat || 0,
+                    lineValue: l.lineValue || 0,
+                    productCode: l.productCode || '',
+                    barcode: l.barcode || ''
+                }))
+            };
+
+            try {
+                const response = await fetch('/api/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(invoicePayload)
+                });
+                const result = await response.json();
+                if (!response.ok || result.error) {
+                    const message = result.message || 'Αποτυχία αποθήκευσης στο backend';
+                    showToast(`❌ ${message}`, 'error');
+                    return;
+                }
+
+                let demos = JSON.parse(localStorage.getItem('rafi_demos') || '[]');
+                demos.push({
+                    datetime: new Date().toISOString(),
+                    supplier: invoicePayload.supplier,
+                    number: invoicePayload.invoice_number,
+                    date: invoicePayload.invoice_date,
+                    markupUsed: invoicePayload.markup_used,
+                    extraCharges: invoicePayload.extra_charges,
+                    shopName: '',
+                    phone: '',
+                    heat: '',
+                    customerName: invoicePayload.customerName,
+                    customerVat: invoicePayload.customerVat,
+                    customerAddress: invoicePayload.customerAddress,
+                    customerPhone: invoicePayload.customerPhone,
+                    linesCount: currentData.lines.length,
+                    savedInvoiceId: result.invoice_id,
+                    sessionId
+                });
+                localStorage.setItem('rafi_demos', JSON.stringify(demos));
+
+                showToast('✓ Το τιμολόγιο αποθηκεύτηκε', 'success');
+                showScreen('screen-start');
+            } catch (err) {
+                showToast('❌ Σφάλμα αποθήκευσης: ' + err.message, 'error');
+            }
+        }
+
+        async function applyHeatToSession(heat) {
+            try {
+                let demos = JSON.parse(localStorage.getItem('rafi_demos') || '[]');
+                const invoiceIds = demos.filter(d => d.savedInvoiceId).map(d => d.savedInvoiceId);
+                if (invoiceIds.length === 0) {
+                    showToast('✓ Η θερμότητα αποθηκεύτηκε τοπικά, αλλά δεν υπάρχουν τιμολόγια αυτής της συνεδρίας.', 'success');
+                    return;
+                }
+
+                const response = await fetch('/api/update-heat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ invoice_ids: invoiceIds, heat })
+                });
+                const result = await response.json();
+                if (!response.ok || result.error) {
+                    const message = result.message || 'Αποτυχία ενημέρωσης θερμότητας';
+                    showToast(`❌ ${message}`, 'error');
+                    return;
+                }
+
+                demos = demos.map(d => ({ ...d, heat }));
+                localStorage.setItem('rafi_demos', JSON.stringify(demos));
+                showToast('✓ Η θερμότητα ενημερώθηκε για τα τιμολόγια της συνεδρίας', 'success');
+            } catch (err) {
+                showToast('❌ Σφάλμα ενημέρωσης θερμότητας: ' + err.message, 'error');
+            }
+        }
+
+        async function saveDemo(heat) {
             const shopName = document.getElementById('commit-shop').value?.trim();
             if (!shopName) {
                 showToast('⚠ Παρακαλώ εισήγαγε το όνομα του καταστήματος', 'error');
@@ -462,28 +579,36 @@
             }
 
             const phone = document.getElementById('commit-phone').value?.trim() || '';
-            const demoRecord = {
-                datetime: new Date().toISOString(),
-                supplier: document.getElementById('inv-supplier').value,
-                number: document.getElementById('inv-number').value,
-                date: document.getElementById('inv-date').value,
-                markupUsed: document.getElementById('ctrl-markup').value,
-                extraCharges: document.getElementById('ctrl-charges').value,
-                shopName, phone, heat, linesCount: currentData.lines.length
-            };
-            
+            let demos = JSON.parse(localStorage.getItem('rafi_demos') || '[]');
+            const invoiceIds = demos.filter(d => d.sessionId === sessionId && d.savedInvoiceId).map(d => d.savedInvoiceId);
+            if (invoiceIds.length === 0) {
+                showToast('⚠ Δεν βρέθηκε αποθηκευμένο τιμολόγιο για αυτή τη συνεδρία', 'error');
+                return;
+            }
+
             try {
-                let demos = JSON.parse(localStorage.getItem('rafi_demos') || '[]');
-                demos.push(demoRecord);
+                const response = await fetch('/api/update-heat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ invoice_ids: invoiceIds, heat, shop_name: shopName, shop_phone: phone })
+                });
+                const result = await response.json();
+                if (!response.ok || result.error) {
+                    const message = result.message || 'Αποτυχία ενημέρωσης θερμότητας';
+                    showToast(`❌ ${message}`, 'error');
+                    return;
+                }
+
+                demos = demos.map(d => d.sessionId === sessionId ? ({ ...d, heat, shopName, phone }) : d);
                 localStorage.setItem('rafi_demos', JSON.stringify(demos));
-                
-                showToast('✓ Το demo αποθηκεύτηκε επιτυχώς!', 'success');
+
+                showToast('✓ Το feedback αποθηκεύτηκε', 'success');
                 document.getElementById('commit-shop').value = '';
                 document.getElementById('commit-phone').value = '';
                 document.getElementById('file-input').value = '';
                 showScreen('screen-start');
             } catch (err) {
-                showToast('❌ Σφάλμα αποθήκευσης: ' + err.message, 'error');
+                showToast('❌ Σφάλμα ενημέρωσης: ' + err.message, 'error');
             }
         }
 
